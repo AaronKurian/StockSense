@@ -1,0 +1,10 @@
+{
+  "name": "StockSense",
+  "short_name": "StockSense",
+  "description": "Personal AI stock advisory — proactive signals and explainable intelligence.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "orientation": "portrait-primary"
+}
