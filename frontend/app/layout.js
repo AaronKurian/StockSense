@@ -19,6 +19,10 @@ export const metadata = {
   description:
     "Proactive AI signals, explainable recommendations, and a learning loop powered by MongoDB + Gemini.",
   manifest: "/manifest.json",
+  icons: {
+    icon: [{ url: "/favicon.png", type: "image/png" }],
+    apple: "/favicon.png",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
