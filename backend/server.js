@@ -10,6 +10,7 @@ import {
 import { getLatestPricesBatch } from "./services/prices.js"
 import { startWebSocket, stopWebSocket, getSubscribedTickers } from "./services/websocket.js"
 import { addClient, removeClient, getClientCount } from "./services/sse.js"
+import { runAgent } from "./agent/index.js"
 
 dotenv.config()
 
@@ -21,11 +22,19 @@ app.use(express.json())
 
 app.get('/', (_req, res) => res.type('text/plain').send('StockSense backend'))
 
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
+  const mcpUrl = process.env.MCP_SERVER_URL || 'http://localhost:8080/mcp'
+  let mcpStatus = 'disconnected'
+  try {
+    const r = await fetch(mcpUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'healthcheck', version: '1.0' } } }), signal: AbortSignal.timeout(3000) })
+    if (r.ok) mcpStatus = 'connected'
+  } catch {}
   res.json({
     status: 'ok',
     mongodb: getDb() ? 'connected' : 'disconnected',
-    websocket: getSubscribedTickers().length > 0 ? 'connected' : 'disconnected'
+    websocket: getSubscribedTickers().length > 0 ? 'connected' : 'disconnected',
+    mcp: mcpStatus,
+    agent: 'ready'
   })
 })
 
@@ -230,6 +239,38 @@ app.post('/tools/record_feedback', async (req, res) => {
     if (!recId || !user_action) return res.status(400).json({ error: 'recId and user_action are required' })
     const updated = await recordFeedback(recId, user_action)
     res.json(updated)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── ADK Agent ─────────────────────────────────────────────────────────────────
+
+app.post('/agent/chat', async (req, res) => {
+  try {
+    const { userId, message } = req.body
+    if (!userId || !message) return res.status(400).json({ error: 'userId and message are required' })
+    const contextMessage = `[User: ${userId}] ${message}`
+    const result = await runAgent(userId, contextMessage)
+    res.json(result)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/agent/run', async (req, res) => {
+  try {
+    const { userId } = req.body
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const prompt = `Analyze the full portfolio for user ${userId}. For every ticker in the portfolio and watchlist:
+1. Get the latest price
+2. Get price context (technicals)
+3. Get market news
+4. Generate and SAVE a recommendation for each ticker
+
+After saving all recommendations, provide a brief portfolio summary with your key findings.`
+    const result = await runAgent(userId, prompt)
+    res.json(result)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

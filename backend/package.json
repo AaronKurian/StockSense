@@ -6,9 +6,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "agent:dev": "npx adk web agent/index.js"
   },
   "dependencies": {
+    "@google/adk": "latest",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
@@ -17,9 +19,11 @@
     "mongodb": "^5.0.0",
     "node-fetch": "^3.3.2",
     "web-push": "^3.5.0",
-    "ws": "8.18.0"
+    "ws": "8.18.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@google/adk-devtools": "latest",
     "nodemon": "^3.1.9"
   }
 }
