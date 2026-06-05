@@ -5,9 +5,9 @@ info:
   description: Tool endpoints for StockSense AI Agent Builder. Provides market data, portfolio context, watchlist state, and recommendation persistence for AI-driven investment signal generation.
 
 servers:
-  - url: http://localhost:3001
-    description: Local development
-
+  - url: https://stocksense-backend-786315542694.asia-south2.run.app
+    description: Production
+    
 paths:
   /tools/get_latest_price:
     get:
