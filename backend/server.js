@@ -1,7 +1,9 @@
 import express from "express"
 import cors from "cors"
 import dotenv from "dotenv"
-import { connect, getDb } from "./config/db.js"
+import bcrypt from "bcryptjs"
+import jwt from "jsonwebtoken"
+import { connect, getDb, getCollection } from "./config/db.js"
 import {
   get_portfolio, get_latest_price, get_watchlist, get_price_context, get_market_news,
   getWatchlists, getWatchlistItems, getRecommendationsForUser,
@@ -49,6 +51,76 @@ app.get('/api/prices/stream', (req, res) => {
 
 app.get('/api/prices/stream/status', (_req, res) => {
   res.json({ connected_clients: getClientCount() })
+})
+
+// ─── Auth ──────────────────────────────────────────────────────────────────────
+
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret'
+
+app.post('/auth/signup', async (req, res) => {
+  try {
+    const { email, password, name } = req.body
+    if (!email || !password) return res.status(400).json({ error: 'email and password are required' })
+    const col = getCollection('users')
+    if (!col) return res.status(500).json({ error: 'DB not connected' })
+    const existing = await col.findOne({ email: email.toLowerCase().trim() })
+    if (existing) return res.status(409).json({ error: 'Email already registered' })
+    const hash = await bcrypt.hash(password, 10)
+    const userId = `user_${Date.now()}`
+    const doc = {
+      _id: userId,
+      email: email.toLowerCase().trim(),
+      password: hash,
+      name: name || email.split('@')[0],
+      risk_tolerance: 'moderate',
+      investment_horizon: 'medium',
+      preferred_sectors: [],
+      experience_level: 'intermediate',
+      created_at: new Date(),
+      updated_at: new Date()
+    }
+    await col.insertOne(doc)
+    const token = jwt.sign({ sub: userId, email: doc.email }, JWT_SECRET, { expiresIn: '7d' })
+    const { password: _, ...user } = doc
+    res.json({ token, user })
+  } catch (err) {
+    if (err.code === 11000) return res.status(409).json({ error: 'Email already registered' })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/auth/signin', async (req, res) => {
+  try {
+    const { email, password } = req.body
+    if (!email || !password) return res.status(400).json({ error: 'email and password are required' })
+    const col = getCollection('users')
+    if (!col) return res.status(500).json({ error: 'DB not connected' })
+    const user = await col.findOne({ email: email.toLowerCase().trim() })
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' })
+    const valid = await bcrypt.compare(password, user.password)
+    if (!valid) return res.status(401).json({ error: 'Invalid credentials' })
+    const token = jwt.sign({ sub: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' })
+    const { password: _, ...safe } = user
+    res.json({ token, user: safe })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/auth/me', async (req, res) => {
+  try {
+    const auth = req.headers.authorization
+    if (!auth) return res.status(401).json({ error: 'No token' })
+    const token = auth.split(' ')[1]
+    const payload = jwt.verify(token, JWT_SECRET)
+    const col = getCollection('users')
+    const user = await col.findOne({ _id: payload.sub })
+    if (!user) return res.status(404).json({ error: 'User not found' })
+    const { password: _, ...safe } = user
+    res.json(safe)
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' })
+  }
 })
 
 // ─── Portfolio ────────────────────────────────────────────────────────────────

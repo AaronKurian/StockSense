@@ -1,4 +1,5 @@
 "use client"
+import { useAuth } from "@/hooks/useAuth"
 
 import { useEffect, useMemo, useState } from "react"
 import { motion } from "framer-motion"
@@ -14,7 +15,7 @@ import { SignalCard } from "@/components/signals/SignalCard"
 import { EmptyState } from "@/components/common/EmptyState"
 import { fetchSignals, patchSignalFeedback } from "@/lib/api"
 
-const USER_ID = 'verify-user'
+
 
 // Map backend recommendation_log → SignalCard shape
 function toSignalShape(rec) {
@@ -36,13 +37,14 @@ function toSignalShape(rec) {
 }
 
 export function SignalCenterPage() {
+  const { userId } = useAuth()
   const [signals, setSignals]   = useState([])
   const [loading, setLoading]   = useState(true)
   const [q, setQ]               = useState("")
   const [minConf, setMinConf]   = useState([0])
 
   useEffect(() => {
-    fetchSignals(USER_ID, { limit: 100 })
+    fetchSignals(userId, { limit: 100 })
       .then(recs => setSignals(recs.map(toSignalShape)))
       .catch(err => {
         console.error(err)

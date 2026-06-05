@@ -1,4 +1,5 @@
 "use client"
+import { useAuth } from "@/hooks/useAuth"
 
 import { useEffect, useState } from "react"
 import { motion } from "framer-motion"
@@ -10,7 +11,7 @@ import { SectorAllocationChart } from "@/components/charts/SectorAllocationChart
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 
-const USER_ID = 'verify-user'
+
 
 function useAnimatedNumber(target, duration = 1200) {
   const [v, setV] = useState(0)
@@ -30,6 +31,7 @@ function useAnimatedNumber(target, duration = 1200) {
 }
 
 export function PortfolioSummary() {
+  const { userId } = useAuth()
   const [positions, setPositions]   = useState([])
   const [sectors, setSectors]       = useState([])
   const [loading, setLoading]       = useState(true)
@@ -37,8 +39,8 @@ export function PortfolioSummary() {
 
   useEffect(() => {
     Promise.all([
-      fetchPortfolio(USER_ID),
-      fetchSectorAllocation(USER_ID),
+      fetchPortfolio(userId),
+      fetchSectorAllocation(userId),
     ]).then(([pos, sec]) => {
       setPositions(pos)
       setSectors(sec)

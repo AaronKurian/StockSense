@@ -1,4 +1,5 @@
 "use client"
+import { useAuth } from "@/hooks/useAuth"
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -11,15 +12,16 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Sidebar } from "@/components/layout/Sidebar"
 import { fetchSignals } from "@/lib/api"
 
-const USER_ID = 'verify-user'
+
 
 export function TopNavbar() {
+  const { userId } = useAuth()
   const pathname = usePathname()
   const [unread, setUnread] = useState(0)
 
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchSignals(USER_ID, { limit: 50 })
+    fetchSignals(userId, { limit: 50 })
       .then(recs => { if (!ctrl.signal.aborted) setUnread(recs.filter(r => !r.user_action).length) })
       .catch(() => {})
     return () => ctrl.abort()

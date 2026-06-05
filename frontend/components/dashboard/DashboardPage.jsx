@@ -11,11 +11,12 @@ import { ActivityFeed } from "@/components/dashboard/ActivityFeed"
 import { IntelligencePanel } from "@/components/dashboard/IntelligencePanel"
 import { PwaInstallBanner } from "@/components/layout/PwaInstallBanner"
 import { fetchSignals, patchSignalFeedback } from "@/lib/api"
+import { useAuth } from "@/hooks/useAuth"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 
-const USER_ID = 'verify-user'
+
 
 // Map backend recommendation_log shape → SignalCard shape
 function toSignalShape(rec) {
@@ -36,6 +37,7 @@ function toSignalShape(rec) {
 }
 
 export function DashboardPage() {
+  const { userId } = useAuth()
   const [booting, setBooting]   = useState(true)
   const [signals, setSignals]   = useState([])
   const [loadingSignals, setLoadingSignals] = useState(true)
@@ -46,7 +48,8 @@ export function DashboardPage() {
   }, [])
 
   useEffect(() => {
-    fetchSignals(USER_ID, { limit: 10 })
+    if (!userId) return
+    fetchSignals(userId, { limit: 10 })
       .then(recs => setSignals(recs.map(toSignalShape)))
       .catch(err => {
         console.error(err)

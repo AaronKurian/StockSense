@@ -1,4 +1,5 @@
 "use client"
+import { useAuth } from "@/hooks/useAuth"
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
@@ -12,7 +13,7 @@ import { RecommendationBreakdown } from "@/components/signals/RecommendationBrea
 import { fetchLatestPrice, fetchSignals, useSSEPrices } from "@/lib/api"
 import { formatPct, formatTimeAgo } from "@/lib/format"
 
-const USER_ID = 'verify-user'
+
 
 // Map recommendation_log → SignalCard-compatible shape
 function toSignalShape(rec) {
@@ -30,6 +31,7 @@ function toSignalShape(rec) {
 }
 
 export function WatchlistDetailPage({ ticker }) {
+  const { userId } = useAuth()
   const upper = ticker?.toUpperCase() ?? 'AAPL'
   const [price, setPrice]       = useState(null)
   const [signals, setSignals]   = useState([])
@@ -38,7 +40,7 @@ export function WatchlistDetailPage({ ticker }) {
   useEffect(() => {
     Promise.all([
       fetchLatestPrice(upper).catch(() => null),
-      fetchSignals(USER_ID, { limit: 20 }).then(recs =>
+      fetchSignals(userId, { limit: 20 }).then(recs =>
         recs.filter(r => r.ticker === upper).map(toSignalShape)
       ).catch(() => []),
     ]).then(([p, sigs]) => {

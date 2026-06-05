@@ -1,4 +1,5 @@
 "use client"
+import { useAuth } from "@/hooks/useAuth"
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
@@ -10,7 +11,7 @@ import { fetchWatchlists, fetchWatchlistItems, useSSEPrices } from "@/lib/api"
 import { formatNumber, formatPct } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
-const USER_ID = 'verify-user'
+
 
 const sigColor = {
   BUY:      "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
@@ -21,16 +22,17 @@ const sigColor = {
 }
 
 export function WatchlistTable() {
+  const { userId } = useAuth()
   const [rows, setRows]     = useState([])
   const [loading, setLoading] = useState(true)
   const [priceMap, setPriceMap] = useState({})
 
   useEffect(() => {
-    fetchWatchlists(USER_ID)
+    fetchWatchlists(userId)
       .then(lists => {
         if (!lists.length) { setLoading(false); return }
         // Use the first watchlist
-        return fetchWatchlistItems(lists[0]._id, USER_ID)
+        return fetchWatchlistItems(lists[0]._id, userId)
       })
       .then(items => { if (items) setRows(items) })
       .catch(console.error)

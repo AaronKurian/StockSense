@@ -1,4 +1,5 @@
 "use client"
+import { useAuth } from "@/hooks/useAuth"
 
 import { useState, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
@@ -11,7 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { ChatMessage } from "@/components/chat/ChatMessage"
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
-const USER_ID = 'verify-user'
+
 
 const SUGGESTED_PROMPTS = [
   "Analyze my portfolio",
@@ -23,6 +24,7 @@ const SUGGESTED_PROMPTS = [
 ]
 
 export function AgentChatPage() {
+  const { userId } = useAuth()
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
@@ -47,7 +49,7 @@ export function AgentChatPage() {
       const res = await fetch(`${BASE}/agent/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: USER_ID, message: trimmed }),
+        body: JSON.stringify({ userId: userId, message: trimmed }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)

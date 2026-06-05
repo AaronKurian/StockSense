@@ -1,6 +1,6 @@
 export function formatInr(n) {
   if (n == null || Number.isNaN(n)) return "—"
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n)
 }
 
 export function formatPct(n, digits = 2) {
@@ -10,7 +10,7 @@ export function formatPct(n, digits = 2) {
 
 export function formatNumber(n, digits = 2) {
   if (n == null || Number.isNaN(n)) return "—"
-  return n.toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  return n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
 export function formatTimeAgo(iso) {

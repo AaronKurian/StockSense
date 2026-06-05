@@ -1,4 +1,5 @@
 "use client"
+import { useAuth } from "@/hooks/useAuth"
 
 import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
@@ -9,7 +10,7 @@ import { NotificationCard } from "@/components/dashboard/NotificationCard"
 import { EmptyState } from "@/components/common/EmptyState"
 import { fetchSignals, patchSignalFeedback } from "@/lib/api"
 
-const USER_ID = 'verify-user'
+
 
 // Map a recommendation_log document to the shape NotificationCard expects
 function toNotification(rec) {
@@ -26,11 +27,12 @@ function toNotification(rec) {
 }
 
 export function NotificationsPage() {
+  const { userId } = useAuth()
   const [recs, setRecs]     = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchSignals(USER_ID, { limit: 50 })
+    fetchSignals(userId, { limit: 50 })
       .then(setRecs)
       .catch(err => {
         console.error(err)

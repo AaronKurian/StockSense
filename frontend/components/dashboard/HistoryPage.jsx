@@ -1,4 +1,5 @@
 "use client"
+import { useAuth } from "@/hooks/useAuth"
 
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
@@ -8,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { fetchSignals } from "@/lib/api"
 import { formatPct } from "@/lib/format"
 
-const USER_ID = 'verify-user'
+
 
 const signalColor = {
   BUY:       "border-emerald-500/30 bg-emerald-500/10 text-emerald-100",
@@ -25,11 +26,12 @@ const actionColor = {
 }
 
 export function HistoryPage() {
+  const { userId } = useAuth()
   const [recs, setRecs]     = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchSignals(USER_ID, { limit: 100 })
+    fetchSignals(userId, { limit: 100 })
       .then(setRecs)
       .catch(err => {
         console.error(err)

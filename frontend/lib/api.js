@@ -9,6 +9,38 @@ async function apiFetch(path, options = {}) {
   return json
 }
 
+export function signup(email, password, name) {
+  return apiFetch('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, name }) })
+}
+
+export function signin(email, password) {
+  return apiFetch('/auth/signin', { method: 'POST', body: JSON.stringify({ email, password }) })
+}
+
+export function fetchMe(token) {
+  return apiFetch('/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+}
+
+export function getToken() {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem('stocksense_token')
+}
+
+export function getUserId() {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem('stocksense_userId')
+}
+
+export function setSession(token, userId) {
+  localStorage.setItem('stocksense_token', token)
+  localStorage.setItem('stocksense_userId', userId)
+}
+
+export function clearSession() {
+  localStorage.removeItem('stocksense_token')
+  localStorage.removeItem('stocksense_userId')
+}
+
 export function fetchPortfolio(userId) {
   return apiFetch(`/api/portfolio?userId=${encodeURIComponent(userId)}`)
 }
@@ -30,7 +62,7 @@ export function fetchSignals(userId, { limit = 50, signal = null, since = null }
   const params = new URLSearchParams({ userId })
   if (limit) params.set('limit', String(limit))
   if (signal) params.set('signal', signal)
-  if (since)  params.set('since', since)
+  if (since) params.set('since', since)
   return apiFetch(`/api/signals?${params}`)
 }
 

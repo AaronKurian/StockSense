@@ -1,4 +1,5 @@
 "use client"
+import { useAuth } from "@/hooks/useAuth"
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -13,7 +14,7 @@ import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { fetchSignals } from "@/lib/api"
 
-const USER_ID = 'verify-user'
+
 const COLLECTIONS = [
   { name: 'watchlist_items', purpose: 'Tickers being tracked' },
   { name: 'portfolio_positions', purpose: 'Holdings + avg price' },
@@ -23,13 +24,14 @@ const COLLECTIONS = [
 ]
 
 export function Sidebar({ variant = "desktop" }) {
+  const { userId, user, logout } = useAuth()
   const pathname = usePathname()
   const isDrawer = variant === "drawer"
   const [signalCount, setSignalCount] = useState(null)
 
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchSignals(USER_ID, { limit: 100 })
+    fetchSignals(userId, { limit: 100 })
       .then(data => { if (!ctrl.signal.aborted && Array.isArray(data)) setSignalCount(data.length) })
       .catch(() => {})
     return () => ctrl.abort()
@@ -82,14 +84,14 @@ export function Sidebar({ variant = "desktop" }) {
       </ScrollArea>
       <div className="border-t border-white/10 p-4">
         <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-          <div className="flex size-9 items-center justify-center rounded-full bg-gradient-to-br from-blue-500/40 to-emerald-500/30 text-xs font-semibold">U</div>
+          <div className="flex size-9 items-center justify-center rounded-full bg-gradient-to-br from-blue-500/40 to-emerald-500/30 text-xs font-semibold">{user?.name?.[0]?.toUpperCase() || 'U'}</div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">Verify User</p>
-            <p className="truncate text-xs text-muted-foreground">moderate · medium horizon</p>
+            <p className="truncate text-sm font-medium">{user?.name || 'User'}</p>
+            <p className="truncate text-xs text-muted-foreground">{user?.risk_tolerance || 'moderate'} · {user?.investment_horizon || 'medium'}</p>
           </div>
         </div>
-        <Button asChild variant="ghost" className="mt-3 w-full justify-start gap-2 rounded-xl text-muted-foreground hover:text-foreground">
-          <Link href="/login"><LogOut className="size-4" />Log out</Link>
+        <Button asChild variant="ghost" className="mt-3 w-full justify-start gap-2 rounded-xl text-muted-foreground hover:text-foreground" onClick={logout}>
+          <span><LogOut className="size-4" />Log out</span>
         </Button>
       </div>
     </aside>
