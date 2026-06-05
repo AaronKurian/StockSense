@@ -1,145 +1,207 @@
 "use client"
 
-import Link from "next/link"
-import { LogOut } from "lucide-react"
+import { useEffect, useState } from "react"
+import { toast } from "sonner"
+import { Settings, Shield, Brain, Radio, Save } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
-import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
-import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
-import { demoOnboardingSummary, demoUser } from "@/data/demo-data"
-import { RiskProfileCard } from "@/components/dashboard/RiskProfileCard"
-import { Slider } from "@/components/ui/slider"
-import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useAuth } from "@/hooks/useAuth"
+
+const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
 export function SettingsPage() {
+  const { userId, user } = useAuth()
+  const [prefs, setPrefs] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!userId) return
+    fetch(`${BASE}/api/preferences?userId=${userId}`)
+      .then(r => r.json())
+      .then(d => { if (d && d.userId) setPrefs(d); else createDefaults() })
+      .catch(() => createDefaults())
+      .finally(() => setLoading(false))
+  }, [userId])
+
+  const createDefaults = () => {
+    fetch(`${BASE}/api/preferences`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) })
+      .then(r => r.json())
+      .then(setPrefs)
+      .catch(() => {})
+  }
+
+  const save = async () => {
+    if (!prefs) return
+    setSaving(true)
+    try {
+      const res = await fetch(`${BASE}/api/preferences`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, ...prefs })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setPrefs(data)
+      toast.success('Preferences saved')
+    } catch (err) {
+      toast.error(err.message || 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <div className="space-y-4">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-32 rounded-2xl bg-white/5" />)}</div>
+
   return (
-    <div className="mx-auto max-w-4xl space-y-8">
-      <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          UI-only controls — wire to Express + Mongo later for persistence.
-        </p>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <RiskProfileCard />
-        <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-          <CardHeader>
-            <CardTitle className="text-base">Profile</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div>
-              <Label>Name</Label>
-              <Input readOnly value={demoUser.name} className="mt-1 rounded-xl border-white/10 bg-black/30" />
-            </div>
-            <div>
-              <Label>Email</Label>
-              <Input readOnly value={demoUser.email} className="mt-1 rounded-xl border-white/10 bg-black/30" />
-            </div>
-          </CardContent>
-        </Card>
+    <div className="space-y-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Settings</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Configure your agent preferences and risk controls.</p>
+        </div>
+        <Button onClick={save} disabled={saving} className="rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500">
+          <Save className="size-4 mr-1.5" /> {saving ? 'Saving…' : 'Save'}
+        </Button>
       </div>
 
       <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
         <CardHeader>
-          <CardTitle className="text-base">Risk profile</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base"><Settings className="size-4 text-blue-300" /> Profile</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="text-xs text-muted-foreground">Name</label>
+            <Input readOnly value={user?.name || ''} className="mt-1 rounded-xl border-white/10 bg-black/30" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Email</label>
+            <Input readOnly value={user?.email || ''} className="mt-1 rounded-xl border-white/10 bg-black/30" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base"><Brain className="size-4 text-emerald-300" /> Agent Mode</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex gap-3">
+            {['default', 'agentic'].map(m => (
+              <button key={m} onClick={() => setPrefs(p => ({ ...p, mode: m }))}
+                className={`flex-1 rounded-xl border p-4 text-left transition-all ${prefs?.mode === m ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-black/30 hover:border-white/20'}`}>
+                <p className="text-sm font-semibold capitalize">{m}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {m === 'default' ? 'Recommendations require your approval before execution.' : 'Agent automatically executes trades above confidence threshold.'}
+                </p>
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-muted-foreground">Agent enabled</label>
+            <button onClick={() => setPrefs(p => ({ ...p, enabled: !p.enabled }))}
+              className={`relative h-6 w-11 rounded-full transition-colors ${prefs?.enabled ? 'bg-emerald-500' : 'bg-white/20'}`}>
+              <span className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white transition-transform ${prefs?.enabled ? 'translate-x-5' : ''}`} />
+            </button>
+            <Badge variant="outline" className={prefs?.enabled ? 'border-emerald-500/30 text-emerald-200' : 'border-white/10'}>{prefs?.enabled ? 'Active' : 'Paused'}</Badge>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base"><Shield className="size-4 text-blue-300" /> Risk Controls</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2">
           <div>
-            <Label className="text-xs text-muted-foreground">Max single-name exposure (%)</Label>
-            <Slider defaultValue={[18]} max={40} step={1} className="mt-3" />
+            <label className="text-xs text-muted-foreground">Risk Tolerance</label>
+            <div className="flex gap-2 mt-2">
+              {['conservative', 'moderate', 'aggressive'].map(r => (
+                <button key={r} onClick={() => setPrefs(p => ({ ...p, risk_tolerance: r }))}
+                  className={`rounded-lg border px-3 py-1.5 text-xs capitalize transition-all ${prefs?.risk_tolerance === r ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200' : 'border-white/10 hover:border-white/20'}`}>
+                  {r}
+                </button>
+              ))}
+            </div>
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Loss tolerance (demo)</Label>
-            <p className="mt-2 text-sm text-muted-foreground">Selected during onboarding: {demoOnboardingSummary.lossTolerance}</p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-        <CardHeader>
-          <CardTitle className="text-base">Notification preferences</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {[
-            ["Push alerts for BUY signals", true],
-            ["Push alerts for EXIT signals", true],
-            ["Email digest (daily)", false],
-            ["Rebalance nudges", true],
-          ].map(([label, on]) => (
-            <div key={label} className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium">{label}</p>
-                <p className="text-xs text-muted-foreground">Maps to Web Push categories later.</p>
-              </div>
-              <Switch defaultChecked={on} />
+            <label className="text-xs text-muted-foreground">Investment Horizon</label>
+            <div className="flex gap-2 mt-2">
+              {['short', 'medium', 'long'].map(h => (
+                <button key={h} onClick={() => setPrefs(p => ({ ...p, investment_horizon: h }))}
+                  className={`rounded-lg border px-3 py-1.5 text-xs capitalize transition-all ${prefs?.investment_horizon === h ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200' : 'border-white/10 hover:border-white/20'}`}>
+                  {h}
+                </button>
+              ))}
             </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-        <CardHeader>
-          <CardTitle className="text-base">Sector preferences</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Textarea
-            readOnly
-            className="min-h-[96px] rounded-xl border-white/10 bg-black/30"
-            value={demoOnboardingSummary.sectors.join(", ")}
-          />
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-        <CardHeader>
-          <CardTitle className="text-base">AI behavior</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Cooldown between duplicate signals (hours)</Label>
-            <Slider defaultValue={[6]} min={1} max={24} step={1} className="mt-3" />
-          </div>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium">Prefer fewer, higher-conviction signals</p>
-              <p className="text-xs text-muted-foreground">Raises confidence threshold dynamically.</p>
+            <label className="text-xs text-muted-foreground">Minimum Confidence</label>
+            <div className="flex items-center gap-3 mt-2">
+              <input type="range" min="50" max="95" value={Math.round((prefs?.min_confidence || 0.7) * 100)}
+                onChange={e => setPrefs(p => ({ ...p, min_confidence: Number(e.target.value) / 100 }))}
+                className="flex-1" />
+              <span className="font-mono text-sm w-10 text-right">{Math.round((prefs?.min_confidence || 0.7) * 100)}%</span>
             </div>
-            <Switch defaultChecked />
           </div>
-          <Separator className="bg-white/10" />
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium">Allow MongoDB MCP tool calls</p>
-              <p className="text-xs text-muted-foreground">Agent can query collections with guardrails.</p>
+          <div>
+            <label className="text-xs text-muted-foreground">Max Position Size</label>
+            <div className="flex items-center gap-3 mt-2">
+              <input type="range" min="5" max="50" value={prefs?.max_position_size_pct || 25}
+                onChange={e => setPrefs(p => ({ ...p, max_position_size_pct: Number(e.target.value) }))}
+                className="flex-1" />
+              <span className="font-mono text-sm w-10 text-right">{prefs?.max_position_size_pct || 25}%</span>
             </div>
-            <Switch defaultChecked />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Stop Loss</label>
+            <div className="flex items-center gap-3 mt-2">
+              <input type="range" min="3" max="30" value={prefs?.stop_loss_pct || 10}
+                onChange={e => setPrefs(p => ({ ...p, stop_loss_pct: Number(e.target.value) }))}
+                className="flex-1" />
+              <span className="font-mono text-sm w-10 text-right">{prefs?.stop_loss_pct || 10}%</span>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Take Profit</label>
+            <div className="flex items-center gap-3 mt-2">
+              <input type="range" min="5" max="50" value={prefs?.take_profit_pct || 20}
+                onChange={e => setPrefs(p => ({ ...p, take_profit_pct: Number(e.target.value) }))}
+                className="flex-1" />
+              <span className="font-mono text-sm w-10 text-right">{prefs?.take_profit_pct || 20}%</span>
+            </div>
           </div>
         </CardContent>
       </Card>
 
       <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
         <CardHeader>
-          <CardTitle className="text-base">Session</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base"><Radio className="size-4 text-amber-200" /> Signal Configuration</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-muted-foreground">
-            Sign out of this device (demo UI — clears no server state yet).
-          </p>
-          <Button asChild variant="outline" className="shrink-0 rounded-xl border-white/15">
-            <Link href="/login" className="inline-flex items-center gap-2">
-              <LogOut className="size-4" />
-              Log out
-            </Link>
-          </Button>
+        <CardContent className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="text-xs text-muted-foreground">Signal Frequency</label>
+            <div className="flex gap-2 mt-2">
+              {['realtime', 'hourly', 'daily', 'weekly'].map(f => (
+                <button key={f} onClick={() => setPrefs(p => ({ ...p, signal_frequency: f }))}
+                  className={`rounded-lg border px-3 py-1.5 text-xs capitalize transition-all ${prefs?.signal_frequency === f ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200' : 'border-white/10 hover:border-white/20'}`}>
+                  {f}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Preferred Sectors</label>
+            <Input value={prefs?.preferred_sectors?.join(', ') || ''}
+              onChange={e => setPrefs(p => ({ ...p, preferred_sectors: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))}
+              placeholder="Technology, Healthcare, Energy"
+              className="mt-2 rounded-xl border-white/10 bg-black/30 text-sm" />
+          </div>
         </CardContent>
       </Card>
-
-      <div className="flex justify-end">
-        <Button className="rounded-xl">Save (demo)</Button>
-      </div>
     </div>
   )
 }

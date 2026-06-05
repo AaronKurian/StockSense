@@ -1,6 +1,5 @@
 "use client"
 import { useAuth } from "@/hooks/useAuth"
-
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Bell, Menu, Search, Sparkles } from "lucide-react"
@@ -10,7 +9,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Sidebar } from "@/components/layout/Sidebar"
-import { fetchSignals } from "@/lib/api"
 
 
 
@@ -20,12 +18,14 @@ export function TopNavbar() {
   const [unread, setUnread] = useState(0)
 
   useEffect(() => {
+    if (!userId) return
     const ctrl = new AbortController()
-    fetchSignals(userId, { limit: 50 })
-      .then(recs => { if (!ctrl.signal.aborted) setUnread(recs.filter(r => !r.user_action).length) })
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/notifications/count?userId=${userId}`, { signal: ctrl.signal })
+      .then(r => r.json())
+      .then(d => { if (!ctrl.signal.aborted) setUnread(d.unread || 0) })
       .catch(() => {})
     return () => ctrl.abort()
-  }, [])
+  }, [userId])
 
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-background/70 backdrop-blur-xl">

@@ -1,9 +1,10 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useAuth } from "@/hooks/useAuth"
 import { motion } from "framer-motion"
 import { toast } from "sonner"
-import { Activity, Radio } from "lucide-react"
+import { Activity, DollarSign, TrendingUp, Zap, Radio, PieChart, Clock } from "lucide-react"
 import { PortfolioSummary } from "@/components/dashboard/PortfolioSummary"
 import { SignalCard } from "@/components/signals/SignalCard"
 import { WatchlistTable } from "@/components/watchlist/WatchlistTable"
@@ -11,67 +12,50 @@ import { ActivityFeed } from "@/components/dashboard/ActivityFeed"
 import { IntelligencePanel } from "@/components/dashboard/IntelligencePanel"
 import { PwaInstallBanner } from "@/components/layout/PwaInstallBanner"
 import { fetchSignals, patchSignalFeedback } from "@/lib/api"
-import { useAuth } from "@/hooks/useAuth"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { formatPct } from "@/lib/format"
 
+const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
-
-// Map backend recommendation_log shape → SignalCard shape
 function toSignalShape(rec) {
   return {
-    id:               rec._id?.toString() ?? rec.ticker,
-    ticker:           rec.ticker,
-    name:             rec.ticker,           // no name field in DB
-    type:             rec.signal,
-    confidence:       Math.round((rec.confidence ?? 0) * 100),
-    urgency:          'medium',             // backend doesn't store urgency yet
-    headline:         rec.rationale?.slice(0, 120) ?? '',
-    rationale:        rec.rationale ?? '',
-    supportingFactors: rec.supporting_factors ?? [],
-    risks:            rec.risks ?? [],
-    indicators:       [],
-    createdAt:        rec.created_at ?? new Date().toISOString(),
+    id: rec._id?.toString() ?? rec.ticker,
+    ticker: rec.ticker, name: rec.ticker, type: rec.signal,
+    confidence: Math.round((rec.confidence ?? 0) * 100),
+    urgency: 'medium', headline: rec.rationale?.slice(0, 120) ?? '',
+    rationale: rec.rationale ?? '', supportingFactors: rec.supporting_factors ?? [],
+    risks: rec.risks ?? [], indicators: [], createdAt: rec.created_at,
   }
 }
 
 export function DashboardPage() {
   const { userId } = useAuth()
-  const [booting, setBooting]   = useState(true)
-  const [signals, setSignals]   = useState([])
+  const [metrics, setMetrics] = useState(null)
+  const [signals, setSignals] = useState([])
+  const [loadingMetrics, setLoadingMetrics] = useState(true)
   const [loadingSignals, setLoadingSignals] = useState(true)
-
-  useEffect(() => {
-    const t = setTimeout(() => setBooting(false), 700)
-    return () => clearTimeout(t)
-  }, [])
+  const [scanning, setScanning] = useState(false)
 
   useEffect(() => {
     if (!userId) return
-    fetchSignals(userId, { limit: 10 })
-      .then(recs => setSignals(recs.map(toSignalShape)))
-      .catch(err => {
-        console.error(err)
-        toast.error('Could not load signals', { description: err.message })
-      })
-      .finally(() => setLoadingSignals(false))
-  }, [])
+    fetch(`${BASE}/api/dashboard/metrics?userId=${userId}`)
+      .then(r => r.json()).then(setMetrics).catch(() => {}).finally(() => setLoadingMetrics(false))
+    fetchSignals(userId, { limit: 5 })
+      .then(recs => setSignals(recs.map(toSignalShape))).catch(() => {}).finally(() => setLoadingSignals(false))
+  }, [userId])
 
-  const handleSignalAction = async (action, signal) => {
-    const actionMap = { Confirm: 'confirmed', Ignore: 'ignored', Snooze: 'snoozed' }
-    const user_action = actionMap[action]
-    if (!user_action) return
-
-    if (action === 'Ignore') {
-      setSignals(prev => prev.filter(s => s.id !== signal.id))
-    }
-
+  const runScan = async () => {
+    setScanning(true)
     try {
-      await patchSignalFeedback(signal.id, user_action)
-    } catch (err) {
-      console.error('feedback patch failed:', err.message)
-    }
+      await fetch(`${BASE}/agent/scan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) })
+      toast.success('Scan complete — check Actions for new signals')
+      fetchSignals(userId, { limit: 5 }).then(recs => setSignals(recs.map(toSignalShape))).catch(() => {})
+      fetch(`${BASE}/api/dashboard/metrics?userId=${userId}`).then(r => r.json()).then(setMetrics).catch(() => {})
+    } catch { toast.error('Scan failed') }
+    finally { setScanning(false) }
   }
 
   return (
@@ -79,61 +63,83 @@ export function DashboardPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Command center</h1>
+            <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Command Center</h1>
             <Badge className="rounded-full border-emerald-500/30 bg-emerald-500/10 text-emerald-100">
-              <Radio className="mr-1 size-3" />
-              Live
+              <Radio className="mr-1 size-3" /> Live
             </Badge>
           </div>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground md:text-base">
-            AI signals, portfolio context, and MongoDB-backed memory — all live.
-          </p>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">AI-powered investment operations — signals, portfolio, and autonomous execution.</p>
         </div>
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4 py-2 text-xs text-muted-foreground"
-        >
-          <Activity className="size-4 text-emerald-300" />
-          SSE stream active
-        </motion.div>
+        <Button onClick={runScan} disabled={scanning} className="rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500 shadow-lg">
+          <Zap className="size-4 mr-1.5" /> {scanning ? 'Scanning…' : 'Run Agent Scan'}
+        </Button>
       </div>
 
-      {booting ? (
-        <div className="grid gap-4 lg:grid-cols-3">
-          <Skeleton className="h-40 rounded-2xl bg-white/5 lg:col-span-2" />
-          <Skeleton className="h-40 rounded-2xl bg-white/5" />
-          <Skeleton className="h-64 rounded-2xl bg-white/5 lg:col-span-3" />
+      {loadingMetrics ? (
+        <div className="grid gap-3 md:grid-cols-5">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20 rounded-xl bg-white/5" />)}</div>
+      ) : metrics && (
+        <div className="grid gap-3 md:grid-cols-5">
+          {[
+            { label: 'Portfolio Value', value: `$${metrics.equity?.toLocaleString()}`, icon: PieChart, color: 'text-blue-300' },
+            { label: 'Cash Available', value: `$${metrics.virtual_cash?.toLocaleString()}`, icon: DollarSign, color: 'text-emerald-300' },
+            { label: 'Return', value: formatPct(metrics.portfolio_return_pct), icon: TrendingUp, color: metrics.portfolio_return_pct >= 0 ? 'text-emerald-300' : 'text-rose-300' },
+            { label: 'Win Rate', value: `${metrics.win_rate}%`, icon: Activity, color: 'text-amber-200' },
+            { label: 'Pending', value: String(metrics.pending_actions), icon: Zap, color: 'text-purple-300' },
+          ].map(m => (
+            <Card key={m.label} className="rounded-xl border-white/10 bg-white/[0.03]">
+              <CardContent className="p-3">
+                <div className="flex items-center gap-2">
+                  <m.icon className={`size-4 ${m.color}`} />
+                  <span className="text-[11px] text-muted-foreground">{m.label}</span>
+                </div>
+                <p className="mt-1 font-mono text-lg font-semibold">{m.value}</p>
+              </CardContent>
+            </Card>
+          ))}
         </div>
-      ) : (
-        <PortfolioSummary />
       )}
+
+      {metrics && (
+        <Card className="rounded-2xl border-white/10 bg-gradient-to-r from-emerald-500/5 via-transparent to-blue-500/5">
+          <CardContent className="flex flex-wrap items-center gap-4 p-4">
+            <Badge className={`rounded-lg ${metrics.mode === 'agentic' ? 'bg-purple-500/20 text-purple-200 border-purple-500/30' : 'bg-blue-500/20 text-blue-200 border-blue-500/30'}`}>
+              Mode: {metrics.mode}
+            </Badge>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Clock className="size-3.5" />
+              Next scan: {metrics.next_scan ? new Date(metrics.next_scan).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+            </div>
+            {metrics.latest_recommendation && (
+              <div className="flex items-center gap-2 text-xs">
+                <Badge variant="outline" className="text-[10px]">{metrics.latest_recommendation.signal} {metrics.latest_recommendation.ticker}</Badge>
+                <span className="font-mono">{metrics.latest_recommendation.confidence != null ? `${Math.round(metrics.latest_recommendation.confidence * 100)}%` : ''}</span>
+                {metrics.latest_recommendation.confidence_delta != null && (
+                  <span className={`font-mono text-[10px] ${metrics.latest_recommendation.confidence_delta >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                    {metrics.latest_recommendation.confidence_delta >= 0 ? '↑' : '↓'}{Math.abs(Math.round(metrics.latest_recommendation.confidence_delta * 100))}%
+                  </span>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <PortfolioSummary />
 
       <div className="grid gap-8 xl:grid-cols-[1fr_360px] xl:items-start">
         <div className="space-y-10">
           <section className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-xl font-semibold tracking-tight">Active signals</h2>
-              <Badge variant="outline" className="rounded-full border-white/15 text-xs text-muted-foreground">
-                Latest first
-              </Badge>
-            </div>
+            <h2 className="text-xl font-semibold tracking-tight">Latest Signals</h2>
             {loadingSignals ? (
-              <div className="space-y-4">
-                {[...Array(2)].map((_, i) => (
-                  <Skeleton key={i} className="h-48 rounded-2xl bg-white/5" />
-                ))}
-              </div>
+              [...Array(2)].map((_, i) => <Skeleton key={i} className="h-48 rounded-2xl bg-white/5" />)
             ) : signals.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No signals yet — run the agent to generate recommendations.
-              </p>
+              <p className="text-sm text-muted-foreground">No signals yet. Click &quot;Run Agent Scan&quot; to generate recommendations.</p>
             ) : (
-              <div className="space-y-4">
-                {signals.map(s => (
-                  <SignalCard key={s.id} signal={s} onAction={handleSignalAction} />
-                ))}
-              </div>
+              signals.map(s => <SignalCard key={s.id} signal={s} onAction={(action, signal) => {
+                const map = { Confirm: 'confirmed', Ignore: 'ignored', Snooze: 'snoozed' }
+                if (map[action]) patchSignalFeedback(signal.id, map[action]).catch(() => {})
+                if (action === 'Ignore') setSignals(prev => prev.filter(x => x.id !== signal.id))
+              }} />)
             )}
           </section>
 
@@ -142,29 +148,20 @@ export function DashboardPage() {
             <WatchlistTable />
           </section>
 
-          <section className="grid gap-4 lg:grid-cols-1">
+          <section>
             <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-              <CardHeader>
-                <CardTitle className="text-base">Realtime feed</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ActivityFeed />
-              </CardContent>
+              <CardHeader><CardTitle className="text-base">Agent Activity</CardTitle></CardHeader>
+              <CardContent><ActivityFeed /></CardContent>
             </Card>
           </section>
         </div>
 
         <div className="hidden xl:block">
-          <div className="sticky top-24 space-y-4">
-            <IntelligencePanel />
-          </div>
+          <div className="sticky top-24 space-y-4"><IntelligencePanel /></div>
         </div>
       </div>
 
-      <div className="xl:hidden">
-        <IntelligencePanel />
-      </div>
-
+      <div className="xl:hidden"><IntelligencePanel /></div>
       <PwaInstallBanner />
     </div>
   )

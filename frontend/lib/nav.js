@@ -1,6 +1,7 @@
 import {
   LayoutDashboard,
   Radio,
+  Zap,
   History,
   MessageSquare,
   Bell,
@@ -10,7 +11,8 @@ import {
 
 export const mainNav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/signals", label: "Signal Center", icon: Radio },
+  { href: "/actions", label: "Actions", icon: Zap },
+  { href: "/signals", label: "Signals", icon: Radio },
   { href: "/history", label: "History", icon: History },
   { href: "/agent", label: "Agent", icon: MessageSquare },
   { href: "/notifications", label: "Notifications", icon: Bell },
@@ -19,8 +21,8 @@ export const mainNav = [
 
 export const mobileNav = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
-  { href: "/signals", label: "Signals", icon: Radio },
+  { href: "/actions", label: "Actions", icon: Zap },
   { href: "/agent", label: "Agent", icon: Sparkles },
-  { href: "/notifications", label: "Alerts", icon: Bell },
+  { href: "/signals", label: "Signals", icon: Radio },
   { href: "/settings", label: "More", icon: Settings },
 ]

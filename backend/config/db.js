@@ -42,6 +42,15 @@ export async function connect(uri, dbName = "stocksense") {
 
     // push_subscriptions: index by userId
     await db.collection('push_subscriptions').createIndex({ userId: 1 })
+
+    await db.collection('agent_preferences').createIndex({ userId: 1 }, { unique: true })
+
+    await db.collection('virtual_trades').createIndex({ userId: 1, created_at: -1 })
+    await db.collection('virtual_trades').createIndex({ userId: 1, ticker: 1, created_at: -1 })
+    await db.collection('virtual_trades').createIndex({ userId: 1, status: 1 })
+
+    await db.collection('notifications').createIndex({ userId: 1, created_at: -1 })
+    await db.collection('notifications').createIndex({ userId: 1, read: 1 })
   } catch (err) {
     console.warn('Index creation skipped or failed:', err.message)
   }

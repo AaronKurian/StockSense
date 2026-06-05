@@ -7,12 +7,17 @@ import { connect, getDb, getCollection } from "./config/db.js"
 import {
   get_portfolio, get_latest_price, get_watchlist, get_price_context, get_market_news,
   getWatchlists, getWatchlistItems, getRecommendationsForUser,
-  getLatestRecommendationsForTickers, recordFeedback, saveRecommendation, calculateSectorAllocation
+  getLatestRecommendationsForTickers, recordFeedback, saveRecommendation, calculateSectorAllocation,
+  approveRecommendation, rejectRecommendation, executeRecommendation, getRecommendationsByStatus
 } from "./services/agent.js"
 import { getLatestPricesBatch } from "./services/prices.js"
 import { startWebSocket, stopWebSocket, getSubscribedTickers } from "./services/websocket.js"
 import { addClient, removeClient, getClientCount } from "./services/sse.js"
+import { getPreferences, createDefaultPreferences, updatePreferences } from "./services/preferences.js"
+import { createVirtualTrade, closeVirtualTrade, getVirtualTrades, getTradeStats, validateExecution, getVirtualCash, calculatePositionSize } from "./services/trades.js"
+import { createNotification, getNotifications, markRead, markAllRead, getUnreadCount } from "./services/notifications.js"
 import { runAgent } from "./agent/index.js"
+import { startScheduler, triggerManualScan, getNextScanTime } from "./services/scheduler.js"
 
 dotenv.config()
 
@@ -76,10 +81,13 @@ app.post('/auth/signup', async (req, res) => {
       investment_horizon: 'medium',
       preferred_sectors: [],
       experience_level: 'intermediate',
+      virtual_cash: 100000,
+      starting_capital: 100000,
       created_at: new Date(),
       updated_at: new Date()
     }
     await col.insertOne(doc)
+    await createDefaultPreferences(userId)
     const token = jwt.sign({ sub: userId, email: doc.email }, JWT_SECRET, { expiresIn: '7d' })
     const { password: _, ...user } = doc
     res.json({ token, user })
@@ -228,6 +236,97 @@ app.patch('/api/signals/:id/feedback', async (req, res) => {
   }
 })
 
+// ─── Action Center (Recommendation Lifecycle) ─────────────────────────────────
+
+app.get('/api/actions/pending', async (req, res) => {
+  try {
+    const { userId, limit } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json(await getRecommendationsByStatus(userId, 'generated', limit ? Number(limit) : 50))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/actions/approved', async (req, res) => {
+  try {
+    const { userId, limit } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json(await getRecommendationsByStatus(userId, 'approved', limit ? Number(limit) : 50))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/actions/executed', async (req, res) => {
+  try {
+    const { userId, limit } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json(await getRecommendationsByStatus(userId, 'executed', limit ? Number(limit) : 50))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/actions/:id/approve', async (req, res) => {
+  try {
+    res.json(await approveRecommendation(req.params.id))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/actions/:id/reject', async (req, res) => {
+  try {
+    res.json(await rejectRecommendation(req.params.id))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/actions/:id/execute', async (req, res) => {
+  try {
+    const col = getCollection('recommendation_log')
+    const { ObjectId } = await import('mongodb')
+    let q
+    try { q = { _id: new ObjectId(req.params.id) } } catch { q = { _id: req.params.id } }
+    const rec = await col.findOne(q)
+    if (!rec) return res.status(404).json({ error: 'Recommendation not found' })
+
+    const action = rec.signal === 'BUY' ? 'BUY' : rec.signal === 'EXIT' ? 'SELL' : null
+    if (!action) return res.status(400).json({ error: `Signal ${rec.signal} is not executable as a trade` })
+
+    const price_doc = await get_latest_price(rec.ticker)
+    const price = price_doc?.price
+    if (!price) return res.status(422).json({ error: `No current price for ${rec.ticker}` })
+
+    const validation = await validateExecution({ userId: rec.userId, ticker: rec.ticker, action, confidence: rec.confidence, price })
+    if (!validation.allowed) return res.status(422).json({ error: validation.reason })
+
+    const prefs = await getPreferences(rec.userId)
+    const { virtual_cash } = await getVirtualCash(rec.userId)
+    const sizing = calculatePositionSize({ virtual_cash, price, confidence: rec.confidence, max_position_size_pct: prefs?.max_position_size_pct || 25, risk_tolerance: prefs?.risk_tolerance || 'moderate' })
+
+    const executed = await executeRecommendation(req.params.id)
+    const trade = await createVirtualTrade({
+      userId: rec.userId, ticker: rec.ticker, action,
+      quantity: sizing.quantity, entry_price: price,
+      signal_id: rec._id?.toString(), rationale: rec.rationale
+    })
+
+    await createNotification({
+      userId: rec.userId, type: 'trade_executed',
+      title: `${action} ${rec.ticker} — ${sizing.quantity} shares @ $${price.toFixed(2)}`,
+      message: rec.rationale?.slice(0, 120) || '',
+      ticker: rec.ticker, recId: rec._id?.toString()
+    })
+
+    res.json({ recommendation: executed, trade, sizing })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ─── Prices ───────────────────────────────────────────────────────────────────
 
 app.get('/api/prices/:ticker', async (req, res) => {
@@ -316,6 +415,154 @@ app.post('/tools/record_feedback', async (req, res) => {
   }
 })
 
+// ─── Agent Preferences ────────────────────────────────────────────────────────
+
+app.get('/api/preferences', async (req, res) => {
+  try {
+    const { userId } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const prefs = await getPreferences(userId)
+    res.json(prefs || {})
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/preferences', async (req, res) => {
+  try {
+    const { userId } = req.body
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const prefs = await createDefaultPreferences(userId)
+    res.json(prefs)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.patch('/api/preferences', async (req, res) => {
+  try {
+    const { userId, ...updates } = req.body
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const prefs = await updatePreferences(userId, updates)
+    res.json(prefs)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── Virtual Trades ───────────────────────────────────────────────────────────
+
+app.post('/api/trades', async (req, res) => {
+  try {
+    const { userId, ticker, action, quantity, entry_price, signal_id, rationale } = req.body
+    if (!userId || !ticker || !action) return res.status(400).json({ error: 'userId, ticker, and action are required' })
+    const trade = await createVirtualTrade({ userId, ticker, action, quantity, entry_price, signal_id, rationale })
+    res.json(trade)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.patch('/api/trades/:id/close', async (req, res) => {
+  try {
+    const { exit_price } = req.body
+    if (!exit_price) return res.status(400).json({ error: 'exit_price is required' })
+    const trade = await closeVirtualTrade(req.params.id, exit_price)
+    res.json(trade)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/trades', async (req, res) => {
+  try {
+    const { userId, status, ticker, limit } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const trades = await getVirtualTrades(userId, { status, ticker, limit: limit ? Number(limit) : 50 })
+    res.json(trades)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/trades/stats', async (req, res) => {
+  try {
+    const { userId } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const stats = await getTradeStats(userId)
+    res.json(stats)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/cash', async (req, res) => {
+  try {
+    const { userId } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json(await getVirtualCash(userId))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/position-size', async (req, res) => {
+  try {
+    const { userId, ticker, confidence } = req.body
+    if (!userId || !ticker) return res.status(400).json({ error: 'userId and ticker required' })
+    const { virtual_cash } = await getVirtualCash(userId)
+    const prefs = await getPreferences(userId)
+    const price_doc = await get_latest_price(ticker.toUpperCase())
+    if (!price_doc?.price) return res.status(404).json({ error: 'No price data' })
+    const sizing = calculatePositionSize({ virtual_cash, price: price_doc.price, confidence: confidence || 0.7, max_position_size_pct: prefs?.max_position_size_pct || 25, risk_tolerance: prefs?.risk_tolerance || 'moderate' })
+    res.json({ ...sizing, ticker: ticker.toUpperCase(), price: price_doc.price, virtual_cash })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const { userId, unreadOnly, limit } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json(await getNotifications(userId, { unreadOnly: unreadOnly === 'true', limit: limit ? Number(limit) : 50 }))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/notifications/count', async (req, res) => {
+  try {
+    const { userId } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json({ unread: await getUnreadCount(userId) })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/notifications/:id/read', async (req, res) => {
+  try {
+    await markRead(req.params.id)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/notifications/read-all', async (req, res) => {
+  try {
+    const { userId } = req.body
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    await markAllRead(userId)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ─── ADK Agent ─────────────────────────────────────────────────────────────────
 
 app.post('/agent/chat', async (req, res) => {
@@ -330,10 +577,80 @@ app.post('/agent/chat', async (req, res) => {
   }
 })
 
+app.post('/agent/scan', async (req, res) => {
+  try {
+    const { userId } = req.body
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const result = await triggerManualScan(userId)
+    res.json(result)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/activity', async (req, res) => {
+  try {
+    const { userId, limit } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const notifications = await getNotifications(userId, { limit: limit ? Number(limit) : 20 })
+    res.json(notifications)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/dashboard/metrics', async (req, res) => {
+  try {
+    const { userId } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const [cash, stats, pendingCount, prefs, latestRec] = await Promise.all([
+      getVirtualCash(userId),
+      getTradeStats(userId),
+      getRecommendationsByStatus(userId, 'generated', 999).then(r => r.length),
+      getPreferences(userId),
+      getRecommendationsByStatus(userId, null, 1).then(r => r[0] || null),
+    ])
+    const positions = await get_portfolio(userId) || []
+    const tickers = positions.map(p => p.ticker)
+    let equity = cash.virtual_cash
+    if (tickers.length) {
+      const priceMap = await getLatestPricesBatch(tickers)
+      for (const pos of positions) {
+        const p = priceMap.get(pos.ticker)
+        if (p?.price) equity += p.price * Number(pos.quantity)
+      }
+    }
+    const unrealized_pnl = Number((equity - cash.virtual_cash - positions.reduce((s, p) => s + Number(p.average_price) * Number(p.quantity), 0)).toFixed(2))
+    res.json({
+      virtual_cash: cash.virtual_cash,
+      starting_capital: cash.starting_capital,
+      equity: Number(equity.toFixed(2)),
+      portfolio_return_pct: Number(((equity - cash.starting_capital) / cash.starting_capital * 100).toFixed(2)),
+      realized_pnl: stats.total_pnl,
+      unrealized_pnl,
+      open_positions: positions.length,
+      open_trades: stats.open_trades,
+      win_rate: stats.win_rate,
+      total_trades: stats.total_trades,
+      pending_actions: pendingCount,
+      mode: prefs?.mode || 'default',
+      next_scan: getNextScanTime(prefs?.signal_frequency || 'daily').toISOString(),
+      latest_recommendation: latestRec ? { ticker: latestRec.ticker, signal: latestRec.signal, confidence: latestRec.confidence, confidence_delta: latestRec.confidence_delta, created_at: latestRec.created_at } : null,
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.post('/agent/run', async (req, res) => {
   try {
     const { userId } = req.body
     if (!userId) return res.status(400).json({ error: 'userId is required' })
+
+    const prefs = await getPreferences(userId)
+    const mode = prefs?.mode || 'default'
+    const minConfidence = prefs?.min_confidence || 0.7
+
     const prompt = `Analyze the full portfolio for user ${userId}. For every ticker in the portfolio and watchlist:
 1. Get the latest price
 2. Get price context (technicals)
@@ -341,7 +658,37 @@ app.post('/agent/run', async (req, res) => {
 4. Generate and SAVE a recommendation for each ticker
 
 After saving all recommendations, provide a brief portfolio summary with your key findings.`
+
     const result = await runAgent(userId, prompt)
+
+    if (mode === 'agentic') {
+      const pending = await getRecommendationsByStatus(userId, 'generated', 20)
+      const { virtual_cash } = await getVirtualCash(userId)
+      const executed = []
+      for (const rec of pending) {
+        if ((rec.signal === 'BUY' || rec.signal === 'EXIT')) {
+          const action = rec.signal === 'BUY' ? 'BUY' : 'SELL'
+          const price_doc = await get_latest_price(rec.ticker)
+          const price = price_doc?.price
+          if (!price) continue
+          const validation = await validateExecution({ userId, ticker: rec.ticker, action, confidence: rec.confidence, price })
+          if (!validation.allowed) continue
+          try {
+            const sizing = calculatePositionSize({ virtual_cash, price, confidence: rec.confidence, max_position_size_pct: prefs?.max_position_size_pct || 25, risk_tolerance: prefs?.risk_tolerance || 'moderate' })
+            const execd = await executeRecommendation(rec._id.toString())
+            await createVirtualTrade({ userId, ticker: rec.ticker, action, quantity: sizing.quantity, entry_price: price, signal_id: rec._id.toString(), rationale: rec.rationale })
+            await createNotification({ userId, type: 'auto_executed', title: `Auto ${action} ${rec.ticker} — ${sizing.quantity} shares @ $${price.toFixed(2)}`, message: rec.rationale?.slice(0, 100) || '', ticker: rec.ticker, recId: rec._id.toString() })
+            executed.push(execd)
+          } catch {}
+        }
+      }
+      result.mode = 'agentic'
+      result.auto_executed = executed.length
+    } else {
+      result.mode = 'default'
+      result.auto_executed = 0
+    }
+
     res.json(result)
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -355,6 +702,7 @@ async function start() {
   app.listen(port, () => console.log(`Listening on http://localhost:${port}`))
   if (process.env.TWELVEDATA_API_KEY) startWebSocket()
   else console.warn('[ws] TWELVEDATA_API_KEY not set')
+  startScheduler()
 }
 
 process.on('SIGTERM', () => { stopWebSocket(); process.exit(0) })

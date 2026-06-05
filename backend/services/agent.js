@@ -1,6 +1,7 @@
 import { getCollection } from '../config/db.js'
 import { fetchTimeSeries } from './twelvedata.js'
 import { getLatestPricesBatch } from './prices.js'
+import { createNotification } from './notifications.js'
 
 const VALID_SIGNALS = new Set(['BUY', 'HOLD', 'EXIT', 'WATCH', 'REBALANCE'])
 const VALID_USER_ACTIONS = new Set(['confirmed', 'ignored', 'snoozed'])
@@ -280,18 +281,95 @@ export async function saveRecommendation({ userId, ticker, signal, confidence = 
   if (!signal || !VALID_SIGNALS.has(signal)) throw new Error('invalid signal')
   if (user_action != null && !VALID_USER_ACTIONS.has(user_action)) throw new Error('invalid user_action')
 
+  const t = String(ticker).toUpperCase()
   const numericConf = confidence != null ? Number(confidence) : null
   if (numericConf != null && !Number.isFinite(numericConf)) throw new Error('invalid confidence')
 
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
+  const existing = await col.findOne({ userId, ticker: t, signal, status: 'generated', created_at: { $gte: twentyFourHoursAgo } })
+  if (existing) return existing
+
+  const prevRec = await col.find({ userId, ticker: t }).sort({ created_at: -1 }).limit(1).next()
+  const prev_confidence = prevRec?.confidence ?? null
+  const confidence_delta = (numericConf != null && prev_confidence != null) ? Number((numericConf - prev_confidence).toFixed(3)) : null
+
   const doc = {
-    userId, ticker: String(ticker).toUpperCase(), signal,
-    confidence: numericConf, rationale: rationale || '',
+    userId, ticker: t, signal,
+    confidence: numericConf, prev_confidence, confidence_delta,
+    rationale: rationale || '',
     supporting_factors: Array.isArray(supporting_factors) ? supporting_factors : [],
     risks: Array.isArray(risks) ? risks : [],
-    created_at: new Date(), user_action: user_action || null
+    status: 'generated',
+    created_at: new Date(), user_action: user_action || null,
+    approved_at: null, rejected_at: null, executed_at: null, expired_at: null
   }
   const res = await col.insertOne(doc)
-  return { ...doc, _id: res.insertedId }
+  const saved = { ...doc, _id: res.insertedId }
+  try {
+    await createNotification({ userId, type: 'recommendation', title: `${signal} ${t}`, message: rationale?.slice(0, 120) || '', ticker: t, recId: res.insertedId.toString() })
+  } catch {}
+  return saved
+}
+
+export async function expireStaleRecommendations() {
+  const col = getCollection('recommendation_log')
+  if (!col) return 0
+  const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000)
+  const result = await col.updateMany(
+    { status: 'generated', created_at: { $lt: fortyEightHoursAgo } },
+    { $set: { status: 'expired', expired_at: new Date() } }
+  )
+  return result.modifiedCount
+}
+
+const VALID_REC_STATUSES = new Set(['generated', 'approved', 'rejected', 'executed', 'expired'])
+
+export async function approveRecommendation(recId) {
+  const col = getCollection('recommendation_log')
+  if (!col) throw new Error('MongoDB not connected')
+  const { ObjectId } = await import('mongodb')
+  let q
+  try { q = { _id: new ObjectId(recId) } } catch { q = { _id: recId } }
+  const rec = await col.findOne(q)
+  if (!rec) throw new Error('Recommendation not found')
+  if (rec.status !== 'generated') throw new Error(`Cannot approve: status is ${rec.status}`)
+  const res = await col.findOneAndUpdate(q, { $set: { status: 'approved', user_action: 'confirmed', approved_at: new Date() } }, { returnDocument: 'after' })
+  return res.value || res
+}
+
+export async function rejectRecommendation(recId) {
+  const col = getCollection('recommendation_log')
+  if (!col) throw new Error('MongoDB not connected')
+  const { ObjectId } = await import('mongodb')
+  let q
+  try { q = { _id: new ObjectId(recId) } } catch { q = { _id: recId } }
+  const rec = await col.findOne(q)
+  if (!rec) throw new Error('Recommendation not found')
+  if (rec.status !== 'generated') throw new Error(`Cannot reject: status is ${rec.status}`)
+  const res = await col.findOneAndUpdate(q, { $set: { status: 'rejected', user_action: 'ignored', rejected_at: new Date() } }, { returnDocument: 'after' })
+  return res.value || res
+}
+
+export async function executeRecommendation(recId) {
+  const col = getCollection('recommendation_log')
+  if (!col) throw new Error('MongoDB not connected')
+  const { ObjectId } = await import('mongodb')
+  let q
+  try { q = { _id: new ObjectId(recId) } } catch { q = { _id: recId } }
+  const rec = await col.findOne(q)
+  if (!rec) throw new Error('Recommendation not found')
+  if (rec.status !== 'approved' && rec.status !== 'generated') throw new Error(`Cannot execute: status is ${rec.status}`)
+  const res = await col.findOneAndUpdate(q, { $set: { status: 'executed', executed_at: new Date() } }, { returnDocument: 'after' })
+  return res.value || res
+}
+
+export async function getRecommendationsByStatus(userId, status, limit = 50) {
+  const col = getCollection('recommendation_log')
+  if (!col) throw new Error('MongoDB not connected')
+  if (!userId) throw new Error('userId is required')
+  const q = { userId }
+  if (status && VALID_REC_STATUSES.has(status)) q.status = status
+  return col.find(q).sort({ created_at: -1 }).limit(Number(limit)).toArray()
 }
 
 export async function getRecommendationsForUser(userId, { limit = 50, since = null, signal = null } = {}) {

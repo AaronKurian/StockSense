@@ -17,6 +17,7 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.1",
     "mongodb": "^5.0.0",
+    "node-cron": "3.0.3",
     "node-fetch": "^3.3.2",
     "web-push": "^3.5.0",
     "ws": "8.18.0",
