@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Area,
   AreaChart,
@@ -10,41 +10,40 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { demoPriceSeries } from "@/data/demo-data"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useSSEPrices } from "@/lib/api"
 
-export function PriceChart({ ticker = "INFY" }) {
-  const [tf, setTf] = useState("1D")
-  const data = useMemo(() => {
-    const series = demoPriceSeries[ticker] || demoPriceSeries.INFY
-    return series.map((row, i) => ({
-      i,
-      c: row.c,
-      band: row.c + Math.sin(i / 3) * 4,
-    }))
-  }, [ticker])
+/**
+ * PriceChart — accumulates live SSE price ticks for a ticker.
+ * No demo data. Shows real-time price as it comes in.
+ * When market is closed, shows "waiting for data" state.
+ */
+export function PriceChart({ ticker = "AAPL" }) {
+  const upper = ticker.toUpperCase()
+  const [points, setPoints] = useState([])
+
+  useSSEPrices((data) => {
+    if (data.ticker === upper && data.price != null) {
+      setPoints(prev => [
+        ...prev.slice(-99),
+        { i: prev.length, c: Number(data.price) }
+      ])
+    }
+  })
+
+  if (!points.length) {
+    return (
+      <div className="flex h-72 items-center justify-center rounded-2xl border border-white/10 bg-black/30 text-sm text-muted-foreground">
+        Waiting for live price ticks via SSE…
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Tabs value={tf} onValueChange={setTf}>
-          <TabsList className="rounded-xl border border-white/10 bg-black/30">
-            {["1H", "1D", "1W", "3M"].map((t) => (
-              <TabsTrigger
-                key={t}
-                value={t}
-                className="rounded-lg data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-100"
-              >
-                {t}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        <p className="text-[11px] text-muted-foreground">Demo series · not live market data</p>
-      </div>
+      <p className="text-[11px] text-muted-foreground">Live price stream · {points.length} tick(s)</p>
       <div className="h-72 w-full min-h-72 min-w-0 rounded-2xl border border-white/10 bg-black/30 p-2">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data}>
+          <AreaChart data={points}>
             <defs>
               <linearGradient id="fillPrice" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#34d399" stopOpacity={0.35} />
@@ -55,7 +54,7 @@ export function PriceChart({ ticker = "INFY" }) {
             <XAxis dataKey="i" tick={false} axisLine={false} />
             <YAxis
               domain={["auto", "auto"]}
-              width={48}
+              width={56}
               tick={{ fill: "#94a3b8", fontSize: 11 }}
               axisLine={false}
               tickLine={false}
@@ -66,10 +65,9 @@ export function PriceChart({ ticker = "INFY" }) {
                 border: "1px solid rgba(255,255,255,0.1)",
                 borderRadius: 12,
               }}
-              formatter={(v) => [v?.toFixed?.(2) ?? v, "Close"]}
+              formatter={(v) => [`$${v?.toFixed?.(2) ?? v}`, "Price"]}
             />
             <Area type="monotone" dataKey="c" stroke="#34d399" fill="url(#fillPrice)" strokeWidth={2} />
-            <Area type="monotone" dataKey="band" stroke="#38bdf8" fill="none" strokeDasharray="4 4" strokeWidth={1} />
           </AreaChart>
         </ResponsiveContainer>
       </div>

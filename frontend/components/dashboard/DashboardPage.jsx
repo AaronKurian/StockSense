@@ -1,27 +1,44 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { motion } from "framer-motion"
 import { toast } from "sonner"
 import { Activity, Radio } from "lucide-react"
 import { PortfolioSummary } from "@/components/dashboard/PortfolioSummary"
 import { SignalCard } from "@/components/signals/SignalCard"
-import { MarketPulseCard } from "@/components/signals/MarketPulseCard"
 import { WatchlistTable } from "@/components/watchlist/WatchlistTable"
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed"
 import { IntelligencePanel } from "@/components/dashboard/IntelligencePanel"
-import { NotificationCard } from "@/components/dashboard/NotificationCard"
 import { PwaInstallBanner } from "@/components/layout/PwaInstallBanner"
-import { demoMarketPulse, demoNotifications, demoSignals } from "@/data/demo-data"
+import { fetchSignals, patchSignalFeedback } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 
-export function DashboardPage() {
-  const [booting, setBooting] = useState(true)
-  const [signals, setSignals] = useState(demoSignals)
+const USER_ID = 'verify-user'
 
-  const previewNotes = useMemo(() => demoNotifications.slice(0, 2), [])
+// Map backend recommendation_log shape → SignalCard shape
+function toSignalShape(rec) {
+  return {
+    id:               rec._id?.toString() ?? rec.ticker,
+    ticker:           rec.ticker,
+    name:             rec.ticker,           // no name field in DB
+    type:             rec.signal,
+    confidence:       Math.round((rec.confidence ?? 0) * 100),
+    urgency:          'medium',             // backend doesn't store urgency yet
+    headline:         rec.rationale?.slice(0, 120) ?? '',
+    rationale:        rec.rationale ?? '',
+    supportingFactors: rec.supporting_factors ?? [],
+    risks:            rec.risks ?? [],
+    indicators:       [],
+    createdAt:        rec.created_at ?? new Date().toISOString(),
+  }
+}
+
+export function DashboardPage() {
+  const [booting, setBooting]   = useState(true)
+  const [signals, setSignals]   = useState([])
+  const [loadingSignals, setLoadingSignals] = useState(true)
 
   useEffect(() => {
     const t = setTimeout(() => setBooting(false), 700)
@@ -29,14 +46,30 @@ export function DashboardPage() {
   }, [])
 
   useEffect(() => {
-    toast.message("Demo stream connected", {
-      description: "SSE + Web Push wiring is mocked — swap in EventSource later.",
-    })
-    const id = setInterval(() => {
-      toast.info("Agent pulse", { description: "Re-scoring watchlist for intraday drift (demo)." })
-    }, 52000)
-    return () => clearInterval(id)
+    fetchSignals(USER_ID, { limit: 10 })
+      .then(recs => setSignals(recs.map(toSignalShape)))
+      .catch(err => {
+        console.error(err)
+        toast.error('Could not load signals', { description: err.message })
+      })
+      .finally(() => setLoadingSignals(false))
   }, [])
+
+  const handleSignalAction = async (action, signal) => {
+    const actionMap = { Confirm: 'confirmed', Ignore: 'ignored', Snooze: 'snoozed' }
+    const user_action = actionMap[action]
+    if (!user_action) return
+
+    if (action === 'Ignore') {
+      setSignals(prev => prev.filter(s => s.id !== signal.id))
+    }
+
+    try {
+      await patchSignalFeedback(signal.id, user_action)
+    } catch (err) {
+      console.error('feedback patch failed:', err.message)
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -46,12 +79,11 @@ export function DashboardPage() {
             <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Command center</h1>
             <Badge className="rounded-full border-emerald-500/30 bg-emerald-500/10 text-emerald-100">
               <Radio className="mr-1 size-3" />
-              Live demo
+              Live
             </Badge>
           </div>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground md:text-base">
-            Your proactive surface for AI signals, portfolio context, and MongoDB-backed memory — optimized for a
-            judge walkthrough.
+            AI signals, portfolio context, and MongoDB-backed memory — all live.
           </p>
         </div>
         <motion.div
@@ -60,7 +92,7 @@ export function DashboardPage() {
           className="flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4 py-2 text-xs text-muted-foreground"
         >
           <Activity className="size-4 text-emerald-300" />
-          AI analyzing deltas…
+          SSE stream active
         </motion.div>
       </div>
 
@@ -80,31 +112,26 @@ export function DashboardPage() {
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-xl font-semibold tracking-tight">Active signals</h2>
               <Badge variant="outline" className="rounded-full border-white/15 text-xs text-muted-foreground">
-                Highest urgency first
+                Latest first
               </Badge>
             </div>
-            <div className="space-y-4">
-              {signals.map((s) => (
-                <SignalCard
-                  key={s.id}
-                  signal={s}
-                  onAction={(action) => {
-                    if (action === "Ignore") {
-                      setSignals((prev) => prev.filter((x) => x.id !== s.id))
-                    }
-                  }}
-                />
-              ))}
-            </div>
-          </section>
-
-          <section className="space-y-4">
-            <h2 className="text-xl font-semibold tracking-tight">AI market pulse</h2>
-            <div className="grid gap-4 md:grid-cols-3">
-              {demoMarketPulse.map((p, i) => (
-                <MarketPulseCard key={p.id} pulse={p} index={i} />
-              ))}
-            </div>
+            {loadingSignals ? (
+              <div className="space-y-4">
+                {[...Array(2)].map((_, i) => (
+                  <Skeleton key={i} className="h-48 rounded-2xl bg-white/5" />
+                ))}
+              </div>
+            ) : signals.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No signals yet — run the agent to generate recommendations.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {signals.map(s => (
+                  <SignalCard key={s.id} signal={s} onAction={handleSignalAction} />
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="space-y-4">
@@ -112,23 +139,13 @@ export function DashboardPage() {
             <WatchlistTable />
           </section>
 
-          <section className="grid gap-4 lg:grid-cols-2">
+          <section className="grid gap-4 lg:grid-cols-1">
             <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
               <CardHeader>
                 <CardTitle className="text-base">Realtime feed</CardTitle>
               </CardHeader>
               <CardContent>
                 <ActivityFeed />
-              </CardContent>
-            </Card>
-            <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-              <CardHeader>
-                <CardTitle className="text-base">Notification preview</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {previewNotes.map((n) => (
-                  <NotificationCard key={n.id} notification={n} />
-                ))}
               </CardContent>
             </Card>
           </section>

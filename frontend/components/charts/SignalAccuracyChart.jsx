@@ -9,13 +9,25 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { demoAccuracySeries } from "@/data/demo-data"
 
-export function SignalAccuracyChart() {
+/**
+ * SignalAccuracyChart — accepts data prop.
+ * data: [{ month: 'Jan', accuracy: 68 }, ...]
+ * If no data, shows empty state.
+ */
+export function SignalAccuracyChart({ data }) {
+  if (!data || !data.length) {
+    return (
+      <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
+        Not enough history for accuracy trend yet.
+      </div>
+    )
+  }
+
   return (
     <div className="h-64 w-full min-h-64 min-w-0">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={demoAccuracySeries}>
+        <BarChart data={data}>
           <defs>
             <linearGradient id="accGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#34d399" />
@@ -29,7 +41,7 @@ export function SignalAccuracyChart() {
             tick={{ fontSize: 11 }}
             axisLine={false}
             tickLine={false}
-            domain={[50, 80]}
+            domain={[0, 100]}
             tickFormatter={(v) => `${v}%`}
           />
           <Tooltip

@@ -4,17 +4,26 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Bell, Menu, Search, Sparkles } from "lucide-react"
 import { motion } from "framer-motion"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Sidebar } from "@/components/layout/Sidebar"
-import { demoMarketSummary, demoNotifications } from "@/data/demo-data"
-import { formatPct } from "@/lib/format"
-import { Badge } from "@/components/ui/badge"
+import { fetchSignals } from "@/lib/api"
+
+const USER_ID = 'verify-user'
 
 export function TopNavbar() {
   const pathname = usePathname()
-  const unread = demoNotifications.filter((n) => !n.read).length
+  const [unread, setUnread] = useState(0)
+
+  useEffect(() => {
+    const ctrl = new AbortController()
+    fetchSignals(USER_ID, { limit: 50 })
+      .then(recs => { if (!ctrl.signal.aborted) setUnread(recs.filter(r => !r.user_action).length) })
+      .catch(() => {})
+    return () => ctrl.abort()
+  }, [])
 
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-background/70 backdrop-blur-xl">
@@ -29,16 +38,19 @@ export function TopNavbar() {
             <Sidebar variant="drawer" />
           </SheetContent>
         </Sheet>
+
         <div className="hidden min-w-0 flex-1 items-center gap-2 md:flex">
           <div className="relative max-w-md flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               readOnly
+              aria-label="Search tickers, signals, history"
               placeholder="Search tickers, signals, history…"
               className="h-10 rounded-xl border-white/10 bg-white/5 pl-10"
             />
           </div>
         </div>
+
         <div className="flex flex-1 items-center justify-end gap-2 md:flex-none">
           <motion.div
             layout
@@ -46,40 +58,30 @@ export function TopNavbar() {
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
           >
-            <span className="text-muted-foreground">{demoMarketSummary.indexName}</span>
-            <span className="font-mono text-sm">{demoMarketSummary.indexValue.toLocaleString("en-IN")}</span>
-            <Badge
-              variant="outline"
-              className="border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-            >
-              {formatPct(demoMarketSummary.indexChangePct)}
-            </Badge>
-            <span className="text-muted-foreground">· {demoMarketSummary.breadth}</span>
+            <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-muted-foreground">SSE live</span>
           </motion.div>
-          <Button
-            asChild
-            size="sm"
-            className="hidden rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500 text-primary-foreground shadow-lg shadow-emerald-500/20 md:inline-flex"
-          >
+
+          <Button asChild size="sm" className="hidden rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500 text-primary-foreground shadow-lg shadow-emerald-500/20 md:inline-flex">
             <Link href="/agent">
               <Sparkles className="mr-1.5 size-4" />
               Ask agent
             </Link>
           </Button>
-          <Button asChild variant="ghost" size="icon" className="relative rounded-xl">
+
+          <Button asChild variant="ghost" size="icon" className="relative rounded-xl" aria-label="Notifications">
             <Link href="/notifications">
               <Bell className="size-5" />
-              {unread > 0 && (
-                <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-emerald-400 ring-2 ring-background" />
-              )}
+              {unread > 0 && <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-emerald-400 ring-2 ring-background" />}
             </Link>
           </Button>
         </div>
       </div>
+
       {pathname.startsWith("/dashboard") && (
         <div className="border-t border-white/5 px-4 py-2 md:hidden">
           <p className="text-[11px] text-muted-foreground">
-            AI stream: <span className="font-mono text-emerald-300/90">SSE-ready</span> · Push hooks wired in UI
+            SSE stream: <span className="font-mono text-emerald-300/90">active</span>
           </p>
         </div>
       )}

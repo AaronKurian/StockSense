@@ -17,9 +17,10 @@ const kindStyle = {
   trigger: "border-amber-500/30 bg-amber-500/10 text-amber-100",
 }
 
-export function NotificationCard({ notification }) {
+export function NotificationCard({ notification, onAction }) {
   const on = (label) => {
     toast.message(label, { description: notification.title })
+    onAction?.(label)
   }
 
   return (

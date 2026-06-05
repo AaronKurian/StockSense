@@ -1,30 +1,82 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
 import { StockHeader } from "@/components/watchlist/StockHeader"
-import { PriceChart } from "@/components/charts/PriceChart"
-import { Timeline } from "@/components/watchlist/Timeline"
 import { AIReasoningPanel } from "@/components/signals/AIReasoningPanel"
 import { RecommendationBreakdown } from "@/components/signals/RecommendationBreakdown"
-import {
-  demoRecommendationHistory,
-  demoReasoningTimeline,
-  getNewsForTicker,
-  getSignalsForTicker,
-  getStockByTicker,
-} from "@/data/demo-data"
-import { formatPct } from "@/lib/format"
+import { fetchLatestPrice, fetchSignals, useSSEPrices } from "@/lib/api"
+import { formatPct, formatTimeAgo } from "@/lib/format"
+
+const USER_ID = 'verify-user'
+
+// Map recommendation_log → SignalCard-compatible shape
+function toSignalShape(rec) {
+  return {
+    id:               rec._id?.toString(),
+    ticker:           rec.ticker,
+    type:             rec.signal,
+    confidence:       Math.round((rec.confidence ?? 0) * 100),
+    rationale:        rec.rationale ?? '',
+    supportingFactors: rec.supporting_factors ?? [],
+    risks:            rec.risks ?? [],
+    createdAt:        rec.created_at,
+    user_action:      rec.user_action ?? null,
+  }
+}
 
 export function WatchlistDetailPage({ ticker }) {
-  const upper = ticker?.toUpperCase() ?? "INFY"
-  const stock = getStockByTicker(upper)
-  const signals = getSignalsForTicker(upper)
-  const primary = signals[0]
-  const news = getNewsForTicker(upper)
-  const history = demoRecommendationHistory.filter((h) => h.ticker === upper)
+  const upper = ticker?.toUpperCase() ?? 'AAPL'
+  const [price, setPrice]       = useState(null)
+  const [signals, setSignals]   = useState([])
+  const [loading, setLoading]   = useState(true)
+
+  useEffect(() => {
+    Promise.all([
+      fetchLatestPrice(upper).catch(() => null),
+      fetchSignals(USER_ID, { limit: 20 }).then(recs =>
+        recs.filter(r => r.ticker === upper).map(toSignalShape)
+      ).catch(() => []),
+    ]).then(([p, sigs]) => {
+      setPrice(p)
+      setSignals(sigs)
+    }).finally(() => setLoading(false))
+  }, [upper])
+
+  // SSE live price overlay
+  useSSEPrices((data) => {
+    if (data.ticker === upper) {
+      setPrice(prev => ({ ...prev, ...data }))
+    }
+  })
+
+  const primary = signals[0] ?? null
+
+  // Build a stock shape for StockHeader
+  const stock = {
+    ticker:    upper,
+    name:      upper,
+    exchange:  'US',
+    sector:    'Technology',
+    price:     price?.price ?? null,
+    changePct: price?.change_percent ?? 0,
+    volume:    price?.volume ? `${(price.volume / 1e6).toFixed(1)}M` : '—',
+    pe:        '—',
+    mcapCr:    0,
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-32 rounded-2xl bg-white/5" />
+        <Skeleton className="h-64 rounded-2xl bg-white/5" />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-8">
@@ -39,9 +91,9 @@ export function WatchlistDetailPage({ ticker }) {
 
       <StockHeader stock={stock} signal={primary} />
 
-      <Tabs defaultValue="chart" className="space-y-4">
+      <Tabs defaultValue="reasoning" className="space-y-4">
         <TabsList className="rounded-xl border border-white/10 bg-black/30">
-          {["chart", "reasoning", "history", "news"].map((t) => (
+          {["reasoning", "history"].map((t) => (
             <TabsTrigger
               key={t}
               value={t}
@@ -51,73 +103,52 @@ export function WatchlistDetailPage({ ticker }) {
             </TabsTrigger>
           ))}
         </TabsList>
-        <TabsContent value="chart" className="space-y-4">
-          <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-            <CardHeader>
-              <CardTitle className="text-base">Price action (demo series)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <PriceChart ticker={upper} />
-            </CardContent>
-          </Card>
-          <RecommendationBreakdown signal={primary} />
-        </TabsContent>
+
         <TabsContent value="reasoning" className="space-y-4">
-          <AIReasoningPanel
-            rationale={
-              primary?.rationale ??
-              "No active signal — agent is monitoring liquidity pockets and sector rotation for a fresh hypothesis."
-            }
-            factors={primary?.supportingFactors ?? ["Watch rules armed", "Memory snapshot healthy"]}
-            risks={primary?.risks ?? ["Event calendar sparse this week"]}
-          />
-          <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-            <CardHeader>
-              <CardTitle className="text-base">Reasoning timeline</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Timeline items={demoReasoningTimeline} />
-            </CardContent>
-          </Card>
+          {primary ? (
+            <>
+              <AIReasoningPanel
+                rationale={primary.rationale}
+                factors={primary.supportingFactors}
+                risks={primary.risks}
+              />
+              <RecommendationBreakdown signal={primary} />
+            </>
+          ) : (
+            <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
+              <CardContent className="p-6 text-sm text-muted-foreground">
+                No signal generated for {upper} yet — run the agent to analyse this ticker.
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
+
         <TabsContent value="history">
           <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
             <CardHeader>
               <CardTitle className="text-base">Recommendation history ({upper})</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              {history.length === 0 ? (
-                <p className="text-muted-foreground">No logged outcomes for this ticker in the demo set.</p>
+              {signals.length === 0 ? (
+                <p className="text-muted-foreground">No logged recommendations for this ticker.</p>
               ) : (
-                history.map((h) => (
-                  <div key={h.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
+                signals.map((s) => (
+                  <div key={s.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-semibold">
-                        {h.signal} · {h.userAction}
+                        {s.type} · {s.confidence}%
                       </span>
-                      <span className="font-mono text-xs text-emerald-200">{formatPct(h.pnlPct)}</span>
+                      <span className="text-[11px] text-muted-foreground">{formatTimeAgo(s.createdAt)}</span>
                     </div>
-                    <p className="mt-2 text-xs text-muted-foreground">{h.accuracyNote}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">{s.rationale?.slice(0, 150)}</p>
+                    {s.user_action && (
+                      <Badge variant="outline" className="mt-2 capitalize border-white/15 text-[10px]">
+                        {s.user_action}
+                      </Badge>
+                    )}
                   </div>
                 ))
               )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-        <TabsContent value="news">
-          <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-            <CardHeader>
-              <CardTitle className="text-base">Related news</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {news.map((n) => (
-                <div key={n.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
-                  <p className="text-sm font-medium">{n.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {n.source} · {n.time}
-                  </p>
-                </div>
-              ))}
             </CardContent>
           </Card>
         </TabsContent>

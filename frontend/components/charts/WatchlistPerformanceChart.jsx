@@ -10,13 +10,25 @@ import {
   YAxis,
   Cell,
 } from "recharts"
-import { demoWatchlistPerformance } from "@/data/demo-data"
 
-export function WatchlistPerformanceChart() {
+/**
+ * WatchlistPerformanceChart — accepts data prop.
+ * data: [{ name: 'AAPL', perf: 4.2 }, ...]
+ * If no data, shows empty state.
+ */
+export function WatchlistPerformanceChart({ data }) {
+  if (!data || !data.length) {
+    return (
+      <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
+        Not enough data for performance attribution yet.
+      </div>
+    )
+  }
+
   return (
     <div className="h-64 w-full min-h-64 min-w-0">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart layout="vertical" data={demoWatchlistPerformance} margin={{ left: 16 }}>
+        <BarChart layout="vertical" data={data} margin={{ left: 16 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" horizontal={false} />
           <XAxis
             type="number"
@@ -44,7 +56,7 @@ export function WatchlistPerformanceChart() {
             formatter={(v) => [`${v}%`, "Return"]}
           />
           <Bar dataKey="perf" radius={[0, 6, 6, 0]}>
-            {demoWatchlistPerformance.map((e) => (
+            {data.map((e) => (
               <Cell
                 key={e.name}
                 fill={e.perf >= 0 ? "rgba(52,211,153,0.85)" : "rgba(251,113,133,0.85)"}
