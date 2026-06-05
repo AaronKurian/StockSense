@@ -1,0 +1,11 @@
+{
+  "name": "stocksense-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "npx -y mongodb-mcp-server@latest --transport http --httpHost 0.0.0.0 --httpPort 8080 --readOnly"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
