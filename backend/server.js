@@ -3,9 +3,9 @@ import cors from "cors"
 import dotenv from "dotenv"
 import { connect, getDb } from "./config/db.js"
 import {
-  get_portfolio, get_latest_price,
+  get_portfolio, get_latest_price, get_watchlist, get_price_context, get_market_news,
   getWatchlists, getWatchlistItems, getRecommendationsForUser,
-  getLatestRecommendationsForTickers, recordFeedback, calculateSectorAllocation
+  getLatestRecommendationsForTickers, recordFeedback, saveRecommendation, calculateSectorAllocation
 } from "./services/agent.js"
 import { getLatestPricesBatch } from "./services/prices.js"
 import { startWebSocket, stopWebSocket, getSubscribedTickers } from "./services/websocket.js"
@@ -154,6 +154,82 @@ app.get('/api/prices/:ticker', async (req, res) => {
     const doc = await get_latest_price(req.params.ticker.toUpperCase())
     if (!doc) return res.status(404).json({ error: 'No price data for ticker' })
     res.json(doc)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── Agent Builder Tool Endpoints ─────────────────────────────────────────────
+
+app.get('/tools/get_latest_price', async (req, res) => {
+  try {
+    const { ticker } = req.query
+    if (!ticker) return res.status(400).json({ error: 'ticker is required' })
+    const doc = await get_latest_price(ticker.toUpperCase())
+    res.json(doc || { ticker: ticker.toUpperCase(), price: null, volume: null, change_percent: null, updated_at: null })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/tools/get_price_context', async (req, res) => {
+  try {
+    const { ticker } = req.query
+    if (!ticker) return res.status(400).json({ error: 'ticker is required' })
+    const ctx = await get_price_context(ticker.toUpperCase())
+    res.json(ctx || { current_price: null, seven_day_change_pct: null, thirty_day_change_pct: null, trend: null, above_50dma: null, above_200dma: null, volume_spike: null })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/tools/get_market_news', async (req, res) => {
+  try {
+    const { ticker } = req.query
+    if (!ticker) return res.status(400).json({ error: 'ticker is required' })
+    res.json(await get_market_news(ticker.toUpperCase()))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/tools/get_portfolio', async (req, res) => {
+  try {
+    const { userId } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json(await get_portfolio(userId) || [])
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/tools/get_watchlist', async (req, res) => {
+  try {
+    const { userId } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json(await get_watchlist(userId) || [])
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/tools/save_recommendation', async (req, res) => {
+  try {
+    const { userId, ticker, signal, confidence, rationale, supporting_factors, risks } = req.body
+    if (!userId || !ticker || !signal) return res.status(400).json({ error: 'userId, ticker, and signal are required' })
+    const saved = await saveRecommendation({ userId, ticker, signal, confidence, rationale, supporting_factors, risks })
+    res.json(saved)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/tools/record_feedback', async (req, res) => {
+  try {
+    const { recId, user_action } = req.body
+    if (!recId || !user_action) return res.status(400).json({ error: 'recId and user_action are required' })
+    const updated = await recordFeedback(recId, user_action)
+    res.json(updated)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

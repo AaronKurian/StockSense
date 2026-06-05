@@ -4,7 +4,7 @@ import { getLatestPricesBatch } from './prices.js'
 
 const VALID_SIGNALS = new Set(['BUY', 'HOLD', 'EXIT', 'WATCH', 'REBALANCE'])
 const VALID_USER_ACTIONS = new Set(['confirmed', 'ignored', 'snoozed'])
-const GEMINI_MODEL = 'gemini-2.5-flash'
+const GEMINI_MODEL = 'gemini-3.5-flash'
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
 
 function warn(msg) { console.warn('[agent] ' + msg) }
