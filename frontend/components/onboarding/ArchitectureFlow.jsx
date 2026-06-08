@@ -11,7 +11,18 @@ import {
   Sparkles,
   User,
 } from "lucide-react"
-import { demoArchitectureFlow } from "@/data/demo-data"
+
+const demoArchitectureFlow = [
+  { id: "1", label: "User", description: "Preferences, feedback, capital policy", icon: "user" },
+  { id: "2", label: "Next.js PWA", description: "Proactive dashboard + SSE client", icon: "layout" },
+  { id: "3", label: "Express + ADK", description: "APIs, Agent, Gemini reasoning", icon: "server" },
+  { id: "4", label: "Agent Builder", description: "Orchestration + tool routing", icon: "bot" },
+  { id: "5", label: "Gemini", description: "Reasoning, rationales, signals", icon: "sparkles" },
+  { id: "6", label: "MongoDB Atlas", description: "Portfolio, signals, memory", icon: "database" },
+  { id: "7", label: "BUY / HOLD / EXIT", description: "Confidence-scored recommendations", icon: "signal" },
+  { id: "8", label: "Web Push", description: "Realtime alerts to devices", icon: "bell" },
+  { id: "9", label: "Feedback loop", description: "recommendation_log → preference updates", icon: "refresh" },
+]
 
 const icons = {
   user: User,

@@ -42,7 +42,7 @@ async function runScheduledScan() {
       if (saved.length) {
         await createNotification({
           userId: pref.userId, type: 'scan_complete',
-          title: `Scan complete — ${saved.length} signal(s)`,
+          title: `Scan complete - ${saved.length} signal(s)`,
           message: saved.map(r => `${r.signal} ${r.ticker}`).join(', '),
         })
       }
@@ -57,7 +57,7 @@ async function runScheduledScan() {
 export function startScheduler() {
   if (tasks.length) return
   tasks.push(cron.schedule('*/5 * * * *', runScheduledScan))
-  console.log('[scheduler] Started — checking every 5 minutes, respects signal_frequency per user')
+  console.log('[scheduler] Started - checking every 5 minutes, respects signal_frequency per user')
 }
 
 export function stopScheduler() {
@@ -77,7 +77,7 @@ export async function triggerManualScan(userId) {
   if (saved.length) {
     await createNotification({
       userId, type: 'scan_complete',
-      title: `Manual scan — ${saved.length} signal(s)`,
+      title: `Manual scan - ${saved.length} signal(s)`,
       message: saved.map(r => `${r.signal} ${r.ticker}`).join(', '),
     })
   }

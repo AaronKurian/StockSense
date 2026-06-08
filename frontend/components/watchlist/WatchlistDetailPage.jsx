@@ -66,8 +66,8 @@ export function WatchlistDetailPage({ ticker }) {
     sector:    'Technology',
     price:     price?.price ?? null,
     changePct: price?.change_percent ?? 0,
-    volume:    price?.volume ? `${(price.volume / 1e6).toFixed(1)}M` : '—',
-    pe:        '—',
+    volume:    price?.volume ? `${(price.volume / 1e6).toFixed(1)}M` : '-',
+    pe:        '-',
     mcapCr:    0,
   }
 
@@ -119,7 +119,7 @@ export function WatchlistDetailPage({ ticker }) {
           ) : (
             <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
               <CardContent className="p-6 text-sm text-muted-foreground">
-                No signal generated for {upper} yet — run the agent to analyse this ticker.
+                No signal generated for {upper} yet - run the agent to analyse this ticker.
               </CardContent>
             </Card>
           )}

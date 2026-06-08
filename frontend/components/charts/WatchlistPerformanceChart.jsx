@@ -12,7 +12,7 @@ import {
 } from "recharts"
 
 /**
- * WatchlistPerformanceChart — accepts data prop.
+ * WatchlistPerformanceChart - accepts data prop.
  * data: [{ name: 'AAPL', perf: 4.2 }, ...]
  * If no data, shows empty state.
  */

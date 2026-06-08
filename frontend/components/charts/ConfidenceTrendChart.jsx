@@ -11,7 +11,7 @@ import {
 } from "recharts"
 
 /**
- * ConfidenceTrendChart — accepts data prop.
+ * ConfidenceTrendChart - accepts data prop.
  * data: [{ day: 'Mon', avg: 72 }, ...]
  * If no data, shows empty state.
  */

@@ -14,20 +14,31 @@ import {
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
-import {
-  demoArchitectureFlow,
-  demoMarketSummary,
-  demoSignals,
-  demoTestimonials,
-} from "@/data/demo-data"
 import { ArchitectureFlow } from "@/components/onboarding/ArchitectureFlow"
 import { ConfidenceMeter } from "@/components/signals/ConfidenceMeter"
 import { formatPct } from "@/lib/format"
 
+const demoMarketSummary = { indexName: "S&P 500", indexValue: 5420.35, indexChangePct: 0.34, breadth: "58% advances", status: "open" }
+const demoSignals = [
+  { id: "s1", ticker: "AAPL", name: "Apple Inc", type: "BUY", confidence: 81, urgency: "high", headline: "Above 200DMA with positive AI catalyst", rationale: "Strong technicals above key moving averages", supportingFactors: ["Above 50DMA and 200DMA", "Positive news catalyst"], risks: ["Market volatility"], indicators: ["RSI 58"] },
+  { id: "s2", ticker: "NVDA", name: "NVIDIA Corp", type: "HOLD", confidence: 74, urgency: "medium", headline: "Strong position, monitor for pullback", rationale: "Trend intact but extended", supportingFactors: ["AI demand strong"], risks: ["Valuation stretched"], indicators: ["ADX 32"] },
+  { id: "s3", ticker: "MSFT", name: "Microsoft Corp", type: "BUY", confidence: 77, urgency: "medium", headline: "Cloud growth accelerating", rationale: "Azure momentum", supportingFactors: ["Cloud revenue growth"], risks: ["Competition"], indicators: ["MACD positive"] },
+]
+const demoTestimonials = [
+  { quote: "StockSense feels like having a portfolio analyst on call 24/7.", name: "Demo User", role: "Investor" },
+  { quote: "The signal cards are absurdly good for explainability.", name: "Demo Dev", role: "Founder" },
+]
+const demoArchitectureFlow = [
+  { id: "1", label: "User", description: "Preferences, feedback, capital policy", icon: "user" },
+  { id: "2", label: "Next.js PWA", description: "Proactive dashboard + SSE client", icon: "layout" },
+  { id: "3", label: "Express + ADK", description: "APIs, Agent, Gemini reasoning", icon: "server" },
+  { id: "4", label: "MongoDB Atlas", description: "Portfolio, signals, memory", icon: "database" },
+]
+
 const features = [
   {
     title: "Proactive signals",
-    body: "BUY / HOLD / EXIT cards with confidence, urgency, risks, and rationale — not a chat-first toy.",
+    body: "BUY / HOLD / EXIT cards with confidence, urgency, risks, and rationale - not a chat-first toy.",
     icon: Zap,
   },
   {
@@ -42,7 +53,7 @@ const features = [
   },
   {
     title: "Realtime delivery",
-    body: "SSE streams + Web Push hooks in the UI architecture — demo toasts simulate live agent updates.",
+    body: "SSE streams + Web Push hooks in the UI architecture - demo toasts simulate live agent updates.",
     icon: Bell,
   },
   {
@@ -107,7 +118,7 @@ export function LandingView() {
               </Badge>
               <h1 className="text-balance text-4xl font-semibold tracking-tight md:text-6xl md:leading-[1.05]">
                 Personal AI that{" "}
-                <span className="text-gradient">tells you what to do</span> — before you ask.
+                <span className="text-gradient">tells you what to do</span> - before you ask.
               </h1>
               <p className="mt-5 max-w-xl text-pretty text-lg text-muted-foreground md:text-xl">
                 StockSense is a signal-first investment intelligence system: continuous monitoring, structured
@@ -201,7 +212,7 @@ export function LandingView() {
           <div className="max-w-2xl">
             <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">Realtime signal showcase</h2>
             <p className="mt-3 text-muted-foreground">
-              The product experience is anchored on high-signal cards — chat is secondary for onboarding and
+              The product experience is anchored on high-signal cards - chat is secondary for onboarding and
               explanations.
             </p>
           </div>
@@ -263,7 +274,7 @@ export function LandingView() {
                   → preference update → better next signal.
                 </p>
                 <p>
-                  MongoDB MCP enables agents to query collections with guardrails — ideal for watchlists, outcomes, and
+                  MongoDB MCP enables agents to query collections with guardrails - ideal for watchlists, outcomes, and
                   long-horizon memory.
                 </p>
               </CardContent>
@@ -275,7 +286,7 @@ export function LandingView() {
           <div>
             <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">End-to-end flow</h2>
             <p className="mt-3 max-w-2xl text-muted-foreground">
-              This is the same story your backend slide will tell — now visualized in-product for judges.
+              This is the same story your backend slide will tell - now visualized in-product for judges.
             </p>
           </div>
           <ArchitectureFlow />

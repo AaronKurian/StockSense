@@ -10,9 +10,10 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/hooks/useAuth"
+import { fetchActionsPending, fetchActionsApproved, fetchActionsExecuted, approveAction, rejectAction, executeAction } from "@/lib/api"
 import { formatTimeAgo, formatPct } from "@/lib/format"
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
+
 
 const signalColor = {
   BUY: "border-emerald-500/30 bg-emerald-500/10 text-emerald-100",
@@ -35,7 +36,7 @@ function ActionCard({ rec, onApprove, onReject, onExecute, showActions = true })
             </div>
             <div className="flex items-center gap-1 text-xs">
               <Shield className="size-3.5 text-blue-300" />
-              <span className="font-mono">{rec.confidence != null ? `${Math.round(rec.confidence * 100)}%` : '—'}</span>
+              <span className="font-mono">{rec.confidence != null ? `${Math.round(rec.confidence * 100)}%` : '-'}</span>
             </div>
           </div>
 
@@ -102,14 +103,14 @@ export function ActionCenterPage() {
     if (!userId) return
     try {
       const [p, a, e] = await Promise.all([
-        fetch(`${BASE}/api/actions/pending?userId=${userId}`).then(r => r.json()),
-        fetch(`${BASE}/api/actions/approved?userId=${userId}`).then(r => r.json()),
-        fetch(`${BASE}/api/actions/executed?userId=${userId}`).then(r => r.json()),
+        fetchActionsPending(userId),
+        fetchActionsApproved(userId),
+        fetchActionsExecuted(userId),
       ])
       setPending(Array.isArray(p) ? p : [])
       setApproved(Array.isArray(a) ? a : [])
       setExecuted(Array.isArray(e) ? e : [])
-    } catch (err) {
+    } catch {
       toast.error('Failed to load actions')
     } finally {
       setLoading(false)
@@ -119,29 +120,18 @@ export function ActionCenterPage() {
   useEffect(() => { fetchAll() }, [userId])
 
   const handleApprove = async (id) => {
-    try {
-      await fetch(`${BASE}/api/actions/${id}/approve`, { method: 'POST' })
-      toast.success('Recommendation approved')
-      fetchAll()
-    } catch { toast.error('Approve failed') }
+    try { await approveAction(id); toast.success('Recommendation approved'); fetchAll() }
+    catch { toast.error('Approve failed') }
   }
 
   const handleReject = async (id) => {
-    try {
-      await fetch(`${BASE}/api/actions/${id}/reject`, { method: 'POST' })
-      toast.success('Recommendation rejected')
-      fetchAll()
-    } catch { toast.error('Reject failed') }
+    try { await rejectAction(id); toast.success('Recommendation rejected'); fetchAll() }
+    catch { toast.error('Reject failed') }
   }
 
   const handleExecute = async (id) => {
-    try {
-      const res = await fetch(`${BASE}/api/actions/${id}/execute`, { method: 'POST' })
-      const data = await res.json()
-      if (!res.ok) { toast.error(data.error || 'Execution failed'); return }
-      toast.success('Trade executed')
-      fetchAll()
-    } catch { toast.error('Execute failed') }
+    try { await executeAction(id); toast.success('Trade executed'); fetchAll() }
+    catch (err) { toast.error(err.message || 'Execution failed') }
   }
 
   return (

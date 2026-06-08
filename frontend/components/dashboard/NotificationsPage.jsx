@@ -10,9 +10,8 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/hooks/useAuth"
+import { fetchNotifications, markNotificationRead, markAllNotificationsRead } from "@/lib/api"
 import { formatTimeAgo } from "@/lib/format"
-
-const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
 const typeColor = {
   recommendation: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
@@ -28,8 +27,7 @@ export function NotificationsPage() {
 
   const load = () => {
     if (!userId) return
-    fetch(`${BASE}/api/notifications?userId=${userId}&limit=50`)
-      .then(r => r.json())
+    fetchNotifications(userId, { limit: 50 })
       .then(d => { if (Array.isArray(d)) setNotifications(d) })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -38,12 +36,12 @@ export function NotificationsPage() {
   useEffect(() => { load() }, [userId])
 
   const markRead = async (id) => {
-    await fetch(`${BASE}/api/notifications/${id}/read`, { method: 'POST' }).catch(() => {})
+    await markNotificationRead(id).catch(() => {})
     setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n))
   }
 
   const markAllRead = async () => {
-    await fetch(`${BASE}/api/notifications/read-all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) }).catch(() => {})
+    await markAllNotificationsRead(userId).catch(() => {})
     setNotifications(prev => prev.map(n => ({ ...n, read: true })))
     toast.success('All notifications marked as read')
   }

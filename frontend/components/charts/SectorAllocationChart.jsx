@@ -27,7 +27,7 @@ export function SectorAllocationChart({ data }) {
   if (!chartData.length) {
     return (
       <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
-        No sector data — add portfolio positions with sectors.
+        No sector data - add portfolio positions with sectors.
       </div>
     )
   }

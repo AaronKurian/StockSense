@@ -6,10 +6,8 @@ import { Activity, Bell, Radio, Zap } from "lucide-react"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/hooks/useAuth"
-import { useSSEPrices } from "@/lib/api"
+import { useSSEPrices, fetchActivity } from "@/lib/api"
 import { formatTimeAgo } from "@/lib/format"
-
-const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
 const iconMap = { recommendation: Radio, trade_executed: Zap, auto_executed: Zap, scan_complete: Activity, info: Bell }
 const colorMap = { recommendation: 'text-emerald-300', trade_executed: 'text-blue-300', auto_executed: 'text-purple-300', scan_complete: 'text-amber-300' }
@@ -21,10 +19,7 @@ export function ActivityFeed() {
 
   useEffect(() => {
     if (!userId) return
-    fetch(`${BASE}/api/activity?userId=${userId}&limit=15`)
-      .then(r => r.json())
-      .then(d => { if (Array.isArray(d)) setItems(d) })
-      .catch(() => {})
+    fetchActivity(userId, 15).then(d => { if (Array.isArray(d)) setItems(d) }).catch(() => {})
   }, [userId])
 
   useSSEPrices((data) => {

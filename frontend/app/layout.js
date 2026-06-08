@@ -15,7 +15,7 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata = {
-  title: "StockSense — AI Investment Intelligence",
+  title: "StockSense - AI Investment Intelligence",
   description:
     "Proactive AI signals, explainable recommendations, and a learning loop powered by MongoDB + Gemini.",
   manifest: "/manifest.json",

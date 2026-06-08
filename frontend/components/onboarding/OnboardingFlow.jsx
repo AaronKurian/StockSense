@@ -8,8 +8,16 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { demoOnboardingSteps, demoOnboardingSummary } from "@/data/demo-data"
 import { cn } from "@/lib/utils"
+
+const demoOnboardingSteps = [
+  { key: "risk", question: "What is your risk appetite?", chips: ["Conservative", "Moderate", "Aggressive"] },
+  { key: "horizon", question: "What is your investment horizon?", chips: ["Short (< 1 year)", "Medium (1-5 years)", "Long (5+ years)"] },
+  { key: "sectors", question: "Which sectors interest you?", chips: ["Technology", "Healthcare", "Finance", "Energy", "Consumer"] },
+  { key: "watchlist", question: "Add tickers to your watchlist", chips: ["AAPL, MSFT", "NVDA, AMD", "TSLA, GOOGL"] },
+  { key: "notify", question: "How should we notify you?", chips: ["Push + Email", "Push only", "In-app only"] },
+]
+const demoOnboardingSummary = { risk: "Moderate", capital: "$100,000", horizon: "1-5 years", sectors: ["Technology", "Healthcare"], watchlist: ["AAPL", "MSFT", "NVDA"], lossTolerance: "10%", notifications: "Push + Email" }
 
 function useTypedQuestion(text, active) {
   const [shown, setShown] = useState("")
@@ -61,7 +69,7 @@ export function OnboardingFlow() {
               <Sparkles className="size-4 text-emerald-300" />
               Guided setup
             </CardTitle>
-            <p className="text-xs text-muted-foreground">ChatGPT-like onboarding — structured for MongoDB writes later.</p>
+            <p className="text-xs text-muted-foreground">ChatGPT-like onboarding - structured for MongoDB writes later.</p>
             <Progress value={progress} className="mt-3 h-2 bg-white/10" />
           </CardHeader>
           <CardContent>
@@ -108,7 +116,7 @@ export function OnboardingFlow() {
                     Step {step + 1}/{demoOnboardingSteps.length}
                   </span>
                   <span className="h-1 w-1 rounded-full bg-emerald-400" />
-                  <span>Agent asks, you tap — no blank canvas.</span>
+                  <span>Agent asks, you tap - no blank canvas.</span>
                 </div>
                 <Card className="rounded-[1.75rem] border-white/10 bg-white/[0.04] shadow-2xl backdrop-blur-xl">
                   <CardContent className="space-y-5 p-6 md:p-8">

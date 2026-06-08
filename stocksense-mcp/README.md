@@ -38,4 +38,4 @@ gcloud run deploy stocksense-mcp \
 
 ## Endpoint
 
-`POST /mcp` — Streamable HTTP MCP endpoint (JSON-RPC over HTTP)
+`POST /mcp` - Streamable HTTP MCP endpoint (JSON-RPC over HTTP)

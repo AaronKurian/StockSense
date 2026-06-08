@@ -10,8 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ChatMessage } from "@/components/chat/ChatMessage"
-
-const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
+import { agentChat } from "@/lib/api"
 
 
 const SUGGESTED_PROMPTS = [
@@ -46,14 +45,7 @@ export function AgentChatPage() {
     setLoading(true)
 
     try {
-      const res = await fetch(`${BASE}/agent/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: userId, message: trimmed }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
-
+      const data = await agentChat(userId, trimmed)
       const assistantMsg = {
         id: `a_${Date.now()}`,
         role: "assistant",
@@ -117,7 +109,7 @@ export function AgentChatPage() {
                 {loading && (
                   <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex items-center gap-2 text-xs text-muted-foreground py-2">
                     <Sparkles className="size-4 animate-pulse text-emerald-300" />
-                    Agent reasoning — calling tools and analyzing data…
+                    Agent reasoning - calling tools and analyzing data…
                   </motion.div>
                 )}
               </AnimatePresence>

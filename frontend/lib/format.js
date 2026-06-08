@@ -1,15 +1,15 @@
 export function formatInr(n) {
-  if (n == null || Number.isNaN(n)) return "—"
+  if (n == null || Number.isNaN(n)) return "-"
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n)
 }
 
 export function formatPct(n, digits = 2) {
-  if (n == null || Number.isNaN(n)) return "—"
+  if (n == null || Number.isNaN(n)) return "-"
   return `${n > 0 ? "+" : ""}${n.toFixed(digits)}%`
 }
 
 export function formatNumber(n, digits = 2) {
-  if (n == null || Number.isNaN(n)) return "—"
+  if (n == null || Number.isNaN(n)) return "-"
   return n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 

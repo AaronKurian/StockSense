@@ -2,49 +2,40 @@
 
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
-import { Settings, Shield, Brain, Radio, Save } from "lucide-react"
+import { Settings, Shield, Brain, Radio, Save, Bell } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/hooks/useAuth"
-
-const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
+import { usePushNotifications } from "@/hooks/usePushNotifications"
+import { fetchPreferences, createPreferences, updatePreferences } from "@/lib/api"
 
 export function SettingsPage() {
   const { userId, user } = useAuth()
+  const { isSupported, isSubscribed, permission, subscribe, unsubscribe } = usePushNotifications()
   const [prefs, setPrefs] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!userId) return
-    fetch(`${BASE}/api/preferences?userId=${userId}`)
-      .then(r => r.json())
-      .then(d => { if (d && d.userId) setPrefs(d); else createDefaults() })
-      .catch(() => createDefaults())
+    fetchPreferences(userId)
+      .then(d => { if (d && d.userId) setPrefs(d); else doCreateDefaults() })
+      .catch(() => doCreateDefaults())
       .finally(() => setLoading(false))
   }, [userId])
 
-  const createDefaults = () => {
-    fetch(`${BASE}/api/preferences`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) })
-      .then(r => r.json())
-      .then(setPrefs)
-      .catch(() => {})
+  const doCreateDefaults = () => {
+    createPreferences(userId).then(setPrefs).catch(() => {})
   }
 
   const save = async () => {
     if (!prefs) return
     setSaving(true)
     try {
-      const res = await fetch(`${BASE}/api/preferences`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, ...prefs })
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      const data = await updatePreferences(userId, prefs)
       setPrefs(data)
       toast.success('Preferences saved')
     } catch (err) {
@@ -199,6 +190,43 @@ export function SettingsPage() {
               onChange={e => setPrefs(p => ({ ...p, preferred_sectors: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))}
               placeholder="Technology, Healthcare, Energy"
               className="mt-2 rounded-xl border-white/10 bg-black/30 text-sm" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base"><Bell className="size-4 text-emerald-300" /> Push Notifications</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Browser Push Notifications</p>
+              <p className="text-xs text-muted-foreground">{!isSupported ? 'Not supported in this browser' : permission === 'denied' ? 'Blocked - enable in browser settings' : isSubscribed ? 'Active - receiving notifications' : 'Disabled'}</p>
+            </div>
+            <Button size="sm" variant={isSubscribed ? "outline" : "default"} className="rounded-xl" onClick={isSubscribed ? unsubscribe : subscribe} disabled={!isSupported || permission === 'denied'}>
+              {isSubscribed ? 'Disable' : 'Enable'}
+            </Button>
+          </div>
+          <div className="border-t border-white/10 pt-4 space-y-3">
+            <p className="text-xs text-muted-foreground">Notification Categories</p>
+            {[
+              { key: 'notify_recommendations', label: 'Recommendations', desc: 'New BUY/EXIT signals' },
+              { key: 'notify_executions', label: 'Trade Executions', desc: 'When trades are executed' },
+              { key: 'notify_rebalancing', label: 'Rebalancing Alerts', desc: 'Portfolio imbalance warnings' },
+              { key: 'notify_scans', label: 'Scan Complete', desc: 'Agent scan finished (low priority)' },
+            ].map(cat => (
+              <div key={cat.key} className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium">{cat.label}</p>
+                  <p className="text-[10px] text-muted-foreground">{cat.desc}</p>
+                </div>
+                <button onClick={() => setPrefs(p => ({ ...p, [cat.key]: !p[cat.key] }))}
+                  className={`relative h-5 w-9 rounded-full transition-colors ${prefs?.[cat.key] !== false ? 'bg-emerald-500' : 'bg-white/20'}`}>
+                  <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${prefs?.[cat.key] !== false ? 'translate-x-4' : ''}`} />
+                </button>
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>

@@ -130,7 +130,7 @@ export function PortfolioSummary() {
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
             {positions.length === 0
-              ? 'No positions yet — add stocks to your portfolio.'
+              ? 'No positions yet - add stocks to your portfolio.'
               : `Tracking ${positions.length} holding${positions.length !== 1 ? 's' : ''}.`}
           </p>
           {positions.slice(0, 3).map(p => {

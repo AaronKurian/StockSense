@@ -18,7 +18,7 @@ const tone = {
 export function SignalCard({ signal, onAction }) {
   const handle = (action) => {
     toast.success(`${action} recorded`, {
-      description: `${signal.type} ${signal.ticker} — demo UI only.`,
+      description: `${signal.type} ${signal.ticker} - demo UI only.`,
     })
     onAction?.(action, signal)
   }

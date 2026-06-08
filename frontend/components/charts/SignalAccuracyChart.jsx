@@ -11,7 +11,7 @@ import {
 } from "recharts"
 
 /**
- * SignalAccuracyChart — accepts data prop.
+ * SignalAccuracyChart - accepts data prop.
  * data: [{ month: 'Jan', accuracy: 68 }, ...]
  * If no data, shows empty state.
  */

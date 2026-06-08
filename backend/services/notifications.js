@@ -1,16 +1,19 @@
 import { getCollection } from '../config/db.js'
+import { sendToUser } from './push.js'
 
 export async function createNotification({ userId, type, title, message, ticker = null, recId = null }) {
   const col = getCollection('notifications')
   if (!col) throw new Error('MongoDB not connected')
   if (!userId || !title) throw new Error('userId and title required')
 
-  const doc = {
-    userId, type: type || 'info', title, message: message || '',
-    ticker: ticker || null, recId: recId || null,
-    read: false, created_at: new Date()
-  }
+  const doc = { userId, type: type || 'info', title, message: message || '', ticker: ticker || null, recId: recId || null, read: false, created_at: new Date() }
   const res = await col.insertOne(doc)
+
+  const pushType = { recommendation: 'recommendation', trade_executed: 'execution', auto_executed: 'execution', scan_complete: 'scan_complete', rebalancing: 'rebalancing' }[type] || null
+  if (pushType) {
+    sendToUser(userId, { title, body: message || '', url: '/actions', entityId: recId || null, tag: `${type}-${ticker || 'general'}`, type: pushType }).catch(() => {})
+  }
+
   return { ...doc, _id: res.insertedId }
 }
 

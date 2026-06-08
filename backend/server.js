@@ -4,6 +4,7 @@ import dotenv from "dotenv"
 import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
 import { connect, getDb, getCollection } from "./config/db.js"
+import { requireAuth } from "./middleware/auth.js"
 import {
   get_portfolio, get_latest_price, get_watchlist, get_price_context, get_market_news,
   getWatchlists, getWatchlistItems, getRecommendationsForUser,
@@ -18,6 +19,8 @@ import { createVirtualTrade, closeVirtualTrade, getVirtualTrades, getTradeStats,
 import { createNotification, getNotifications, markRead, markAllRead, getUnreadCount } from "./services/notifications.js"
 import { runAgent } from "./agent/index.js"
 import { startScheduler, triggerManualScan, getNextScanTime } from "./services/scheduler.js"
+import { initPush, getPublicKey, subscribe as pushSubscribe, unsubscribe as pushUnsubscribe } from "./services/push.js"
+import { getPortfolioIntelligence } from "./services/intelligence.js"
 
 dotenv.config()
 
@@ -316,7 +319,7 @@ app.post('/api/actions/:id/execute', async (req, res) => {
 
     await createNotification({
       userId: rec.userId, type: 'trade_executed',
-      title: `${action} ${rec.ticker} — ${sizing.quantity} shares @ $${price.toFixed(2)}`,
+      title: `${action} ${rec.ticker} - ${sizing.quantity} shares @ $${price.toFixed(2)}`,
       message: rec.rationale?.slice(0, 120) || '',
       ticker: rec.ticker, recId: rec._id?.toString()
     })
@@ -521,6 +524,43 @@ app.post('/api/position-size', async (req, res) => {
   }
 })
 
+// ─── Push Notifications ───────────────────────────────────────────────────────
+
+app.get('/api/push/public-key', (_req, res) => {
+  res.json({ publicKey: getPublicKey() })
+})
+
+app.post('/api/push/subscribe', requireAuth, async (req, res) => {
+  try {
+    const { subscription } = req.body
+    if (!subscription) return res.status(400).json({ error: 'subscription required' })
+    await pushSubscribe(req.userId, subscription)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/push/unsubscribe', requireAuth, async (req, res) => {
+  try {
+    const { endpoint } = req.body
+    if (!endpoint) return res.status(400).json({ error: 'endpoint required' })
+    res.json(await pushUnsubscribe(req.userId, endpoint))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── Portfolio Intelligence ───────────────────────────────────────────────────
+
+app.get('/api/portfolio/intelligence', requireAuth, async (req, res) => {
+  try {
+    res.json(await getPortfolioIntelligence(req.userId))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ─── Notifications ────────────────────────────────────────────────────────────
 
 app.get('/api/notifications', async (req, res) => {
@@ -677,7 +717,7 @@ After saving all recommendations, provide a brief portfolio summary with your ke
             const sizing = calculatePositionSize({ virtual_cash, price, confidence: rec.confidence, max_position_size_pct: prefs?.max_position_size_pct || 25, risk_tolerance: prefs?.risk_tolerance || 'moderate' })
             const execd = await executeRecommendation(rec._id.toString())
             await createVirtualTrade({ userId, ticker: rec.ticker, action, quantity: sizing.quantity, entry_price: price, signal_id: rec._id.toString(), rationale: rec.rationale })
-            await createNotification({ userId, type: 'auto_executed', title: `Auto ${action} ${rec.ticker} — ${sizing.quantity} shares @ $${price.toFixed(2)}`, message: rec.rationale?.slice(0, 100) || '', ticker: rec.ticker, recId: rec._id.toString() })
+            await createNotification({ userId, type: 'auto_executed', title: `Auto ${action} ${rec.ticker} - ${sizing.quantity} shares @ $${price.toFixed(2)}`, message: rec.rationale?.slice(0, 100) || '', ticker: rec.ticker, recId: rec._id.toString() })
             executed.push(execd)
           } catch {}
         }
@@ -702,6 +742,7 @@ async function start() {
   app.listen(port, () => console.log(`Listening on http://localhost:${port}`))
   if (process.env.TWELVEDATA_API_KEY) startWebSocket()
   else console.warn('[ws] TWELVEDATA_API_KEY not set')
+  initPush()
   startScheduler()
 }
 

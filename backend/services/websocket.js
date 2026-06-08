@@ -17,7 +17,7 @@ import { upsertLatestPrice } from './prices.js'
 import { broadcastPrice } from './sse.js'
 
 const WS_URL = 'wss://ws.twelvedata.com/v1/quotes/price'
-const HEARTBEAT_INTERVAL_MS = 10_000   // 10 s — per Twelve Data recommendation
+const HEARTBEAT_INTERVAL_MS = 10_000   // 10 s - per Twelve Data recommendation
 const RECONNECT_BASE_MS     = 2_000    // initial back-off
 const RECONNECT_MAX_MS      = 60_000   // cap back-off at 60 s
 const SUBSCRIBE_DELAY_MS    = 500      // brief pause after open before subscribing
@@ -30,6 +30,7 @@ let reconnectDelay = RECONNECT_BASE_MS
 // Track what we're currently subscribed to so we avoid duplicate sub messages
 let subscribedTickers = new Set()
 let isShuttingDown = false
+let intentionalClose = false
 
 // ─── Ticker resolution ───────────────────────────────────────────────────────
 
@@ -127,7 +128,7 @@ async function handleMessage(raw) {
     const day_volume    = msg.day_volume   != null ? Number(msg.day_volume)   : null
     // Twelve Data doesn't send change_percent in the WS tick; preserve whatever
     // is already stored by passing null (upsertLatestPrice only $sets non-null
-    // fields — see note below).
+    // fields - see note below).
     const updated_at    = msg.timestamp    != null
       ? new Date(Number(msg.timestamp) * 1000).toISOString()
       : new Date().toISOString()
@@ -139,7 +140,7 @@ async function handleMessage(raw) {
         change_percent: null,   // not available in WS price events
         updated_at
       })
-      // Push directly to SSE clients — no polling, no extra DB read
+      // Push directly to SSE clients - no polling, no extra DB read
       broadcastPrice(ticker, doc)
     } catch (err) {
       console.error(`[ws] upsertLatestPrice failed for ${ticker}:`, err.message)
@@ -151,7 +152,7 @@ async function handleMessage(raw) {
     if (msg.status === 'ok') {
       const ok   = (msg.success || []).map(s => s.symbol).join(', ') || '(none)'
       const fail = (msg.fails   || []).map(s => s.symbol).join(', ') || '(none)'
-      console.log(`[ws] subscribe-status ok — success: [${ok}]  fails: [${fail}]`)
+      console.log(`[ws] subscribe-status ok - success: [${ok}]  fails: [${fail}]`)
     } else {
       console.warn('[ws] subscribe-status non-ok:', JSON.stringify(msg))
     }
@@ -159,7 +160,7 @@ async function handleMessage(raw) {
   }
 
   if (msg.event === 'heartbeat') {
-    // server echoes heartbeat — no action needed
+    // server echoes heartbeat - no action needed
     return
   }
 
@@ -185,10 +186,11 @@ function scheduleReconnect() {
 
 async function connect() {
   if (isShuttingDown) return
+  intentionalClose = false
 
   const apiKey = process.env.TWELVEDATA_API_KEY
   if (!apiKey) {
-    throw new Error('TWELVEDATA_API_KEY not configured — WebSocket cannot connect')
+    throw new Error('TWELVEDATA_API_KEY not configured - WebSocket cannot connect')
   }
 
   const url = `${WS_URL}?apikey=${encodeURIComponent(apiKey)}`
@@ -213,11 +215,15 @@ async function connect() {
     }
 
     if (!tickers.length) {
-      console.log('[ws] no tickers to subscribe to (watchlists and portfolio are empty)')
+      console.log('[ws] no tickers to subscribe to - closing connection, will retry when tickers are added')
+      stopHeartbeat()
+      intentionalClose = true
+      ws.close(1000, 'no-tickers')
+      ws = null
       return
     }
 
-    // Full resubscribe on reconnect — reset tracking set so sendSubscribe sends everything
+    // Full resubscribe on reconnect - reset tracking set so sendSubscribe sends everything
     subscribedTickers = new Set()
     sendSubscribe(tickers)
   })
@@ -227,9 +233,13 @@ async function connect() {
   })
 
   ws.on('close', (code, reason) => {
-    console.warn(`[ws] connection closed — code: ${code}, reason: ${reason || '(none)'}`)
     stopHeartbeat()
     ws = null
+    if (intentionalClose) {
+      intentionalClose = false
+      return
+    }
+    console.warn(`[ws] connection closed - code: ${code}, reason: ${reason || '(none)'}`)
     scheduleReconnect()
   })
 
@@ -245,11 +255,11 @@ async function connect() {
  * Start the WebSocket manager.
  * Call once after MongoDB is connected and env vars are loaded.
  *
- * Safe to call multiple times — subsequent calls are no-ops if already running.
+ * Safe to call multiple times - subsequent calls are no-ops if already running.
  */
 export function startWebSocket() {
   if (ws || reconnectTimer) {
-    console.log('[ws] already running — ignoring startWebSocket() call')
+    console.log('[ws] already running - ignoring startWebSocket() call')
     return
   }
   isShuttingDown = false
@@ -295,7 +305,7 @@ export function subscribeToTickers(tickers) {
     // Connection is not open yet; add them to the pending set so they're
     // included in the next resubscribe triggered by the 'open' event.
     // resolveTrackedTickers() reads from MongoDB, so new DB rows will be
-    // picked up automatically — no explicit pending set needed.
+    // picked up automatically - no explicit pending set needed.
     console.log('[ws] not connected yet; tickers will be subscribed on next connect:', normalized.join(', '))
   }
 }

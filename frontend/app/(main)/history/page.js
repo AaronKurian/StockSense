@@ -1,7 +1,7 @@
 import { HistoryPage } from "@/components/dashboard/HistoryPage"
 
 export const metadata = {
-  title: "History — StockSense",
+  title: "History - StockSense",
 }
 
 export default function Page() {

@@ -13,7 +13,7 @@ import {
 import { useSSEPrices } from "@/lib/api"
 
 /**
- * PriceChart — accumulates live SSE price ticks for a ticker.
+ * PriceChart - accumulates live SSE price ticks for a ticker.
  * No demo data. Shows real-time price as it comes in.
  * When market is closed, shows "waiting for data" state.
  */

@@ -2,23 +2,20 @@
 
 import { useEffect, useState } from "react"
 import { useAuth } from "@/hooks/useAuth"
-import { motion } from "framer-motion"
 import { toast } from "sonner"
 import { Activity, DollarSign, TrendingUp, Zap, Radio, PieChart, Clock } from "lucide-react"
 import { PortfolioSummary } from "@/components/dashboard/PortfolioSummary"
+import { PortfolioHealthCard } from "@/components/dashboard/PortfolioHealthCard"
 import { SignalCard } from "@/components/signals/SignalCard"
 import { WatchlistTable } from "@/components/watchlist/WatchlistTable"
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed"
-import { IntelligencePanel } from "@/components/dashboard/IntelligencePanel"
 import { PwaInstallBanner } from "@/components/layout/PwaInstallBanner"
-import { fetchSignals, patchSignalFeedback } from "@/lib/api"
+import { fetchSignals, patchSignalFeedback, fetchDashboardMetrics, fetchPortfolioIntelligence, agentScan } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatPct } from "@/lib/format"
-
-const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
 function toSignalShape(rec) {
   return {
@@ -35,25 +32,25 @@ export function DashboardPage() {
   const { userId } = useAuth()
   const [metrics, setMetrics] = useState(null)
   const [signals, setSignals] = useState([])
+  const [intel, setIntel] = useState(null)
   const [loadingMetrics, setLoadingMetrics] = useState(true)
   const [loadingSignals, setLoadingSignals] = useState(true)
   const [scanning, setScanning] = useState(false)
 
   useEffect(() => {
     if (!userId) return
-    fetch(`${BASE}/api/dashboard/metrics?userId=${userId}`)
-      .then(r => r.json()).then(setMetrics).catch(() => {}).finally(() => setLoadingMetrics(false))
-    fetchSignals(userId, { limit: 5 })
-      .then(recs => setSignals(recs.map(toSignalShape))).catch(() => {}).finally(() => setLoadingSignals(false))
+    fetchDashboardMetrics(userId).then(setMetrics).catch(() => {}).finally(() => setLoadingMetrics(false))
+    fetchSignals(userId, { limit: 5 }).then(recs => setSignals(recs.map(toSignalShape))).catch(() => {}).finally(() => setLoadingSignals(false))
+    fetchPortfolioIntelligence().then(d => { if (d.healthScore != null) setIntel(d) }).catch(() => {})
   }, [userId])
 
   const runScan = async () => {
     setScanning(true)
     try {
-      await fetch(`${BASE}/agent/scan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) })
-      toast.success('Scan complete — check Actions for new signals')
+      await agentScan(userId)
+      toast.success('Scan complete - check Actions for new signals')
       fetchSignals(userId, { limit: 5 }).then(recs => setSignals(recs.map(toSignalShape))).catch(() => {})
-      fetch(`${BASE}/api/dashboard/metrics?userId=${userId}`).then(r => r.json()).then(setMetrics).catch(() => {})
+      fetchDashboardMetrics(userId).then(setMetrics).catch(() => {})
     } catch { toast.error('Scan failed') }
     finally { setScanning(false) }
   }
@@ -68,7 +65,7 @@ export function DashboardPage() {
               <Radio className="mr-1 size-3" /> Live
             </Badge>
           </div>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">AI-powered investment operations — signals, portfolio, and autonomous execution.</p>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">AI-powered investment operations - signals, portfolio, and autonomous execution.</p>
         </div>
         <Button onClick={runScan} disabled={scanning} className="rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500 shadow-lg">
           <Zap className="size-4 mr-1.5" /> {scanning ? 'Scanning…' : 'Run Agent Scan'}
@@ -107,7 +104,7 @@ export function DashboardPage() {
             </Badge>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Clock className="size-3.5" />
-              Next scan: {metrics.next_scan ? new Date(metrics.next_scan).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+              Next scan: {metrics.next_scan ? new Date(metrics.next_scan).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}
             </div>
             {metrics.latest_recommendation && (
               <div className="flex items-center gap-2 text-xs">
@@ -126,7 +123,58 @@ export function DashboardPage() {
 
       <PortfolioSummary />
 
-      <div className="grid gap-8 xl:grid-cols-[1fr_360px] xl:items-start">
+      {intel && intel.sectors?.length > 0 && (
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Sector Allocation</CardTitle></CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {intel.sectors.map(s => (
+                  <div key={s.sector} className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">{s.sector}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="h-2 rounded-full bg-emerald-500/30 w-20">
+                        <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.round(s.weight * 100)}%` }} />
+                      </div>
+                      <span className="font-mono w-8 text-right">{Math.round(s.weight * 100)}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Portfolio Breakdown</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Cash Allocation</span><span className="font-mono">{Math.round((intel.allocation?.cashWeight || 0) * 100)}%</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Equity Allocation</span><span className="font-mono">{Math.round((intel.allocation?.equityWeight || 0) * 100)}%</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Positions</span><span className="font-mono">{intel.allocation?.positionCount || 0}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Diversification</span><span className="font-mono">{intel.allocation?.diversificationScore || 0}/100</span></div>
+              {intel.performance?.bestPerformer && (
+                <div className="flex justify-between text-xs"><span className="text-muted-foreground">Top Gainer</span><span className="font-mono text-emerald-300">{intel.performance.bestPerformer} +{intel.performance.bestPerformerPct}%</span></div>
+              )}
+              {intel.performance?.worstPerformer && (
+                <div className="flex justify-between text-xs"><span className="text-muted-foreground">Top Loser</span><span className="font-mono text-rose-300">{intel.performance.worstPerformer} {intel.performance.worstPerformerPct}%</span></div>
+              )}
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total Return</span><span className={`font-mono ${(intel.performance?.totalReturnPct || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{formatPct(intel.performance?.totalReturnPct || 0)}</span></div>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Rebalancing Warnings</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              {intel.warnings?.length > 0 ? intel.warnings.map((w, i) => (
+                <div key={i} className={`rounded-lg border px-2.5 py-1.5 text-xs ${w.severity === 'critical' || w.severity === 'high' ? 'border-amber-500/30 bg-amber-500/5 text-amber-200' : 'border-white/10 text-muted-foreground'}`}>
+                  {w.message}
+                </div>
+              )) : <p className="text-xs text-muted-foreground">No rebalancing warnings.</p>}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      <div className="">
         <div className="space-y-10">
           <section className="space-y-4">
             <h2 className="text-xl font-semibold tracking-tight">Latest Signals</h2>
@@ -155,13 +203,11 @@ export function DashboardPage() {
             </Card>
           </section>
         </div>
-
-        <div className="hidden xl:block">
-          <div className="sticky top-24 space-y-4"><IntelligencePanel /></div>
-        </div>
       </div>
 
-      <div className="xl:hidden"><IntelligencePanel /></div>
+      <div className="xl:hidden">
+        <PortfolioHealthCard intel={intel} />
+      </div>
       <PwaInstallBanner />
     </div>
   )

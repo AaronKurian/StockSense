@@ -91,7 +91,7 @@ export function WatchlistTable() {
                     {row.sector && <p className="text-xs text-muted-foreground">{row.sector}</p>}
                   </td>
                   <td className="px-4 py-3 font-mono">
-                    {price != null ? formatNumber(price, 2) : '—'}
+                    {price != null ? formatNumber(price, 2) : '-'}
                   </td>
                   <td className="px-4 py-3">
                     {changePct != null ? (
@@ -106,13 +106,13 @@ export function WatchlistTable() {
                       <Badge variant="outline" className={cn("rounded-lg text-[11px]", sigColor[row.signal.type] ?? '')}>
                         {row.signal.type}
                       </Badge>
-                    ) : <span className="text-muted-foreground text-xs">—</span>}
+                    ) : <span className="text-muted-foreground text-xs">-</span>}
                   </td>
                   <td className="px-4 py-3 font-mono text-xs">
-                    {row.signal ? `${row.signal.confidence}%` : '—'}
+                    {row.signal ? `${row.signal.confidence}%` : '-'}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {volume != null ? Number(volume).toLocaleString('en-IN') : '—'}
+                    {volume != null ? Number(volume).toLocaleString('en-IN') : '-'}
                   </td>
                 </tr>
               )

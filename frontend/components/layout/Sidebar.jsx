@@ -67,20 +67,6 @@ export function Sidebar({ variant = "desktop" }) {
             )
           })}
         </nav>
-        <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-3">
-          <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <Database className="size-3.5 text-blue-300" />
-            MongoDB Atlas
-          </div>
-          <div className="space-y-1.5">
-            {COLLECTIONS.map(c => (
-              <div key={c.name} className="rounded-lg border border-white/5 bg-white/[0.02] px-2 py-1.5">
-                <span className="font-mono text-[10px] text-emerald-200">{c.name}</span>
-                <p className="text-[10px] text-muted-foreground">{c.purpose}</p>
-              </div>
-            ))}
-          </div>
-        </div>
       </ScrollArea>
       <div className="border-t border-white/10 p-4">
         <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">

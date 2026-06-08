@@ -7,7 +7,7 @@ let connected = false
 export async function connect(uri, dbName = "stocksense") {
   if (connected && client) return { client, db }
   if (!uri) {
-    console.warn("MONGODB_URI not provided — MongoDB unavailable")
+    console.warn("MONGODB_URI not provided - MongoDB unavailable")
     return null
   }
   client = new MongoClient(uri)
@@ -51,6 +51,9 @@ export async function connect(uri, dbName = "stocksense") {
 
     await db.collection('notifications').createIndex({ userId: 1, created_at: -1 })
     await db.collection('notifications').createIndex({ userId: 1, read: 1 })
+
+    await db.collection('ticker_metadata').createIndex({ ticker: 1 }, { unique: true })
+    await db.collection('push_subscriptions').createIndex({ userId: 1, endpoint: 1 }, { unique: true })
   } catch (err) {
     console.warn('Index creation skipped or failed:', err.message)
   }

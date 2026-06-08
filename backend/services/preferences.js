@@ -18,13 +18,20 @@ const DEFAULT_PREFERENCES = {
   min_confidence: 0.7,
   preferred_sectors: [],
   excluded_sectors: [],
+  push_enabled: true,
+  notify_recommendations: true,
+  notify_executions: true,
+  notify_rebalancing: true,
+  notify_scans: false,
 }
 
 export async function getPreferences(userId) {
   const col = getCollection('agent_preferences')
   if (!col) throw new Error('MongoDB not connected')
   if (!userId) throw new Error('userId is required')
-  return await col.findOne({ userId }) || null
+  const stored = await col.findOne({ userId })
+  if (!stored) return null
+  return { ...DEFAULT_PREFERENCES, ...stored }
 }
 
 export async function createDefaultPreferences(userId) {
@@ -89,6 +96,11 @@ export async function updatePreferences(userId, updates = {}) {
     if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error('invalid min_confidence')
     set.min_confidence = v
   }
+  if (updates.push_enabled != null) set.push_enabled = Boolean(updates.push_enabled)
+  if (updates.notify_recommendations != null) set.notify_recommendations = Boolean(updates.notify_recommendations)
+  if (updates.notify_executions != null) set.notify_executions = Boolean(updates.notify_executions)
+  if (updates.notify_rebalancing != null) set.notify_rebalancing = Boolean(updates.notify_rebalancing)
+  if (updates.notify_scans != null) set.notify_scans = Boolean(updates.notify_scans)
 
   if (Object.keys(set).length === 1) throw new Error('no valid fields to update')
   const res = await col.findOneAndUpdate({ userId }, { $set: set }, { returnDocument: 'after', upsert: true })

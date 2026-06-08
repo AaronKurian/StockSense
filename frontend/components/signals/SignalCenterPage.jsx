@@ -78,7 +78,7 @@ export function SignalCenterPage() {
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Signal center</h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Every recommendation from the AI pipeline — confidence, rationale, supporting factors, and risks.
+          Every recommendation from the AI pipeline - confidence, rationale, supporting factors, and risks.
         </p>
       </div>
 

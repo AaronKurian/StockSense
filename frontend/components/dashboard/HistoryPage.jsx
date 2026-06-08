@@ -61,7 +61,7 @@ export function HistoryPage() {
         <h1 className="text-3xl font-semibold tracking-tight">Recommendation history</h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
           All signals saved to{' '}
-          <span className="font-mono text-emerald-200">recommendation_log</span> — confirms and ignores feed
+          <span className="font-mono text-emerald-200">recommendation_log</span> - confirms and ignores feed
           the learning loop.
         </p>
       </div>
@@ -93,7 +93,7 @@ export function HistoryPage() {
             </div>
           ) : recs.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No recommendations yet — run the agent pipeline first.
+              No recommendations yet - run the agent pipeline first.
             </p>
           ) : (
             <table className="w-full min-w-[720px] text-sm">
@@ -114,7 +114,7 @@ export function HistoryPage() {
                     <td className="py-3 text-muted-foreground text-xs">
                       {rec.created_at
                         ? new Date(rec.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' })
-                        : '—'}
+                        : '-'}
                     </td>
                     <td className="py-3 font-semibold">{rec.ticker}</td>
                     <td className="py-3">
@@ -123,7 +123,7 @@ export function HistoryPage() {
                       </Badge>
                     </td>
                     <td className="py-3 font-mono">
-                      {rec.confidence != null ? `${Math.round(rec.confidence * 100)}%` : '—'}
+                      {rec.confidence != null ? `${Math.round(rec.confidence * 100)}%` : '-'}
                     </td>
                     <td className="py-3">
                       {rec.user_action ? (
@@ -135,7 +135,7 @@ export function HistoryPage() {
                       )}
                     </td>
                     <td className="py-3 text-muted-foreground max-w-xs truncate text-xs">
-                      {rec.rationale?.slice(0, 80) ?? '—'}
+                      {rec.rationale?.slice(0, 80) ?? '-'}
                     </td>
                   </tr>
                 ))}
