@@ -38,6 +38,7 @@ export function WatchlistDetailPage({ ticker }) {
   const [loading, setLoading]   = useState(true)
 
   useEffect(() => {
+    if (!userId) return
     Promise.all([
       fetchLatestPrice(upper).catch(() => null),
       fetchSignals(userId, { limit: 20 }).then(recs =>
@@ -47,7 +48,7 @@ export function WatchlistDetailPage({ ticker }) {
       setPrice(p)
       setSignals(sigs)
     }).finally(() => setLoading(false))
-  }, [upper])
+  }, [upper, userId])
 
   // SSE live price overlay
   useSSEPrices((data) => {
@@ -94,7 +95,7 @@ export function WatchlistDetailPage({ ticker }) {
       <StockHeader stock={stock} signal={primary} />
 
       <Tabs defaultValue="reasoning" className="space-y-4">
-        <TabsList className="rounded-xl border border-white/10 bg-black/30">
+        <TabsList className="rounded-md border border-white/10 bg-black/30">
           {["reasoning", "history"].map((t) => (
             <TabsTrigger
               key={t}
@@ -135,7 +136,7 @@ export function WatchlistDetailPage({ ticker }) {
                 <p className="text-muted-foreground">No logged recommendations for this ticker.</p>
               ) : (
                 signals.map((s) => (
-                  <div key={s.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
+                  <div key={s.id} className="rounded-md border border-white/10 bg-black/30 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-semibold">
                         {s.type} · {s.confidence}%

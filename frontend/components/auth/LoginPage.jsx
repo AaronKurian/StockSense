@@ -43,15 +43,15 @@ export function LoginPage() {
             <h1 className="text-xl font-semibold">Sign in to StockSense</h1>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <Input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} className="rounded-xl border-white/10 bg-black/30" required />
+            <Input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} className="rounded-md border-white/10 bg-black/30" required />
             <div className="relative">
-              <Input type={showPw ? "text" : "password"} placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} className="rounded-xl border-white/10 bg-black/30 pr-10" required />
+              <Input type={showPw ? "text" : "password"} placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} className="rounded-md border-white/10 bg-black/30 pr-10" required />
               <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                 {showPw ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </button>
             </div>
             {error && <p className="text-xs text-rose-400">{error}</p>}
-            <Button type="submit" className="w-full rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500" disabled={loading}>
+            <Button type="submit" className="w-full rounded-md bg-gradient-to-r from-emerald-500 to-blue-500" disabled={loading}>
               {loading ? "Signing in…" : "Sign in"}
             </Button>
           </form>

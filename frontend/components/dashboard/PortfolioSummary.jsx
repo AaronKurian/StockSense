@@ -38,6 +38,7 @@ export function PortfolioSummary() {
   const [priceMap, setPriceMap]     = useState({})
 
   useEffect(() => {
+    if (!userId) return
     Promise.all([
       fetchPortfolio(userId),
       fetchSectorAllocation(userId),
@@ -45,7 +46,7 @@ export function PortfolioSummary() {
       setPositions(pos)
       setSectors(sec)
     }).catch(console.error).finally(() => setLoading(false))
-  }, [])
+  }, [userId])
 
   // Live price updates via SSE
   useSSEPrices((data) => {
@@ -139,7 +140,7 @@ export function PortfolioSummary() {
               ? ((livePrice - Number(p.average_price)) / Number(p.average_price)) * 100
               : null
             return (
-              <div key={p.ticker} className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs">
+              <div key={p.ticker} className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold">{p.ticker}</span>
                   {pnl_pct != null && (

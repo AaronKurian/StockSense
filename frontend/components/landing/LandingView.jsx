@@ -80,7 +80,7 @@ export function LandingView() {
       </div>
       <header className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-4 py-6 md:px-6">
         <Link href="/" className="flex items-center gap-2">
-          <div className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/30 to-blue-500/30 ring-1 ring-white/10">
+          <div className="flex size-9 items-center justify-center rounded-md bg-gradient-to-br from-emerald-500/30 to-blue-500/30 ring-1 ring-white/10">
             <Brain className="size-5 text-emerald-200" />
           </div>
           <span className="text-sm font-semibold tracking-tight">StockSense</span>
@@ -97,12 +97,12 @@ export function LandingView() {
           </a>
         </nav>
         <div className="flex items-center gap-2">
-          <Button asChild variant="ghost" className="rounded-xl">
+          <Button asChild variant="ghost" className="rounded-md">
             <Link href="/login">Log in</Link>
           </Button>
           <Button
             asChild
-            className="rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500 text-emerald-950 shadow-lg shadow-emerald-500/25"
+            className="rounded-md bg-gradient-to-r from-emerald-500 to-blue-500 text-emerald-950 shadow-lg shadow-emerald-500/25"
           >
             <Link href="/signup">Get started</Link>
           </Button>
@@ -185,11 +185,11 @@ export function LandingView() {
                   <p className="mt-2 leading-relaxed">{heroSignal.headline}</p>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
-                  <Button className="rounded-xl bg-emerald-500 text-emerald-950 hover:bg-emerald-400">Confirm</Button>
-                  <Button variant="outline" className="rounded-xl border-white/15">
+                  <Button className="rounded-md bg-emerald-500 text-emerald-950 hover:bg-emerald-400">Confirm</Button>
+                  <Button variant="outline" className="rounded-md border-white/15">
                     Ignore
                   </Button>
-                  <Button variant="secondary" className="rounded-xl">
+                  <Button variant="secondary" className="rounded-md">
                     Snooze
                   </Button>
                 </div>
@@ -305,7 +305,7 @@ export function LandingView() {
               >
                 <Card className="h-full rounded-2xl border-white/10 bg-white/[0.03] transition-colors hover:border-emerald-500/25">
                   <CardContent className="space-y-3 p-6">
-                    <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/20 to-blue-500/20 ring-1 ring-white/10">
+                    <div className="flex size-10 items-center justify-center rounded-md bg-gradient-to-br from-emerald-500/20 to-blue-500/20 ring-1 ring-white/10">
                       <f.icon className="size-5 text-emerald-200" />
                     </div>
                     <p className="text-lg font-semibold">{f.title}</p>

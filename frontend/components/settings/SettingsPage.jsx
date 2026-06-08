@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
-import { Settings, Shield, Brain, Radio, Save, Bell } from "lucide-react"
+import { Settings, Shield, Brain, Radio, Save, Bell, Trash2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,14 +10,16 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/hooks/useAuth"
 import { usePushNotifications } from "@/hooks/usePushNotifications"
-import { fetchPreferences, createPreferences, updatePreferences } from "@/lib/api"
+import { fetchPreferences, createPreferences, updatePreferences, deleteAccount, clearSession } from "@/lib/api"
 
 export function SettingsPage() {
-  const { userId, user } = useAuth()
+  const { userId, user, logout } = useAuth()
   const { isSupported, isSubscribed, permission, subscribe, unsubscribe } = usePushNotifications()
   const [prefs, setPrefs] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     if (!userId) return
@@ -54,7 +56,7 @@ export function SettingsPage() {
           <h1 className="text-3xl font-semibold tracking-tight">Settings</h1>
           <p className="mt-2 text-sm text-muted-foreground">Configure your agent preferences and risk controls.</p>
         </div>
-        <Button onClick={save} disabled={saving} className="rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500">
+        <Button onClick={save} disabled={saving} className="rounded-md bg-gradient-to-r from-emerald-500 to-blue-500">
           <Save className="size-4 mr-1.5" /> {saving ? 'Saving…' : 'Save'}
         </Button>
       </div>
@@ -66,11 +68,11 @@ export function SettingsPage() {
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div>
             <label className="text-xs text-muted-foreground">Name</label>
-            <Input readOnly value={user?.name || ''} className="mt-1 rounded-xl border-white/10 bg-black/30" />
+            <Input readOnly value={user?.name || ''} className="mt-1 rounded-md border-white/10 bg-black/30" />
           </div>
           <div>
             <label className="text-xs text-muted-foreground">Email</label>
-            <Input readOnly value={user?.email || ''} className="mt-1 rounded-xl border-white/10 bg-black/30" />
+            <Input readOnly value={user?.email || ''} className="mt-1 rounded-md border-white/10 bg-black/30" />
           </div>
         </CardContent>
       </Card>
@@ -83,7 +85,7 @@ export function SettingsPage() {
           <div className="flex gap-3">
             {['default', 'agentic'].map(m => (
               <button key={m} onClick={() => setPrefs(p => ({ ...p, mode: m }))}
-                className={`flex-1 rounded-xl border p-4 text-left transition-all ${prefs?.mode === m ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-black/30 hover:border-white/20'}`}>
+                className={`flex-1 rounded-md border p-4 text-left transition-all ${prefs?.mode === m ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-black/30 hover:border-white/20'}`}>
                 <p className="text-sm font-semibold capitalize">{m}</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {m === 'default' ? 'Recommendations require your approval before execution.' : 'Agent automatically executes trades above confidence threshold.'}
@@ -189,7 +191,7 @@ export function SettingsPage() {
             <Input value={prefs?.preferred_sectors?.join(', ') || ''}
               onChange={e => setPrefs(p => ({ ...p, preferred_sectors: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))}
               placeholder="Technology, Healthcare, Energy"
-              className="mt-2 rounded-xl border-white/10 bg-black/30 text-sm" />
+              className="mt-2 rounded-md border-white/10 bg-black/30 text-sm" />
           </div>
         </CardContent>
       </Card>
@@ -204,7 +206,7 @@ export function SettingsPage() {
               <p className="text-sm font-medium">Browser Push Notifications</p>
               <p className="text-xs text-muted-foreground">{!isSupported ? 'Not supported in this browser' : permission === 'denied' ? 'Blocked - enable in browser settings' : isSubscribed ? 'Active - receiving notifications' : 'Disabled'}</p>
             </div>
-            <Button size="sm" variant={isSubscribed ? "outline" : "default"} className="rounded-xl" onClick={isSubscribed ? unsubscribe : subscribe} disabled={!isSupported || permission === 'denied'}>
+            <Button size="sm" variant={isSubscribed ? "outline" : "default"} className="rounded-md" onClick={isSubscribed ? unsubscribe : subscribe} disabled={!isSupported || permission === 'denied'}>
               {isSubscribed ? 'Disable' : 'Enable'}
             </Button>
           </div>
@@ -230,6 +232,47 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <Card className="rounded-2xl border-rose-500/20 bg-rose-500/5">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base text-rose-300"><Trash2 className="size-4" /> Danger Zone</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">Permanently delete your account and all associated data. This cannot be undone.</p>
+          <Button variant="outline" size="sm" className="rounded-md border-rose-500/30 text-rose-300 hover:bg-rose-500/10" onClick={() => setShowDeleteModal(true)}>
+            <Trash2 className="size-3.5 mr-1.5" /> Delete Account
+          </Button>
+        </CardContent>
+      </Card>
+
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <Card className="w-fit max-w-sm rounded-2xl border-rose-500/10 bg-background">
+            <CardContent className="p-5 space-y-3 -mb-6">
+              <div className="flex items-center gap-3">
+                  <p className="text-sm font-semibold">Delete Account</p>
+              </div>
+              <p className="text-sm text-muted-foreground">All your data will be permanently deleted including your portfolio, trades, recommendations, watchlists, and preferences.</p>
+              <div className="flex items-center gap-2 justify-center p-2">
+                <Button variant="outline" size="sm" className="w-full max-w-32 sm:max-w-44" onClick={() => setShowDeleteModal(false)}>Cancel</Button>
+                <Button variant="destructive" size="sm" className="w-full max-w-32 sm:max-w-44 bg-rose-600 hover:bg-rose-700" disabled={deleting} onClick={async () => {
+                  setDeleting(true)
+                  try {
+                    await deleteAccount()
+                    clearSession()
+                    logout()
+                  } catch (err) {
+                    toast.error(err.message || 'Delete failed')
+                    setDeleting(false)
+                  }
+                }}>
+                  {deleting ? 'Deleting…' : 'Delete'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   )
 }

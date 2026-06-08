@@ -9,7 +9,8 @@ import {
   get_portfolio, get_latest_price, get_watchlist, get_price_context, get_market_news,
   getWatchlists, getWatchlistItems, getRecommendationsForUser,
   getLatestRecommendationsForTickers, recordFeedback, saveRecommendation, calculateSectorAllocation,
-  approveRecommendation, rejectRecommendation, executeRecommendation, getRecommendationsByStatus
+  approveRecommendation, rejectRecommendation, executeRecommendation, getRecommendationsByStatus,
+  createWatchlist, addWatchlistItem
 } from "./services/agent.js"
 import { getLatestPricesBatch } from "./services/prices.js"
 import { startWebSocket, stopWebSocket, getSubscribedTickers } from "./services/websocket.js"
@@ -134,6 +135,34 @@ app.get('/auth/me', async (req, res) => {
   }
 })
 
+app.delete('/auth/account', requireAuth, async (req, res) => {
+  try {
+    const userId = req.userId
+    await Promise.all([
+      getCollection('users')?.deleteOne({ _id: userId }),
+      getCollection('agent_preferences')?.deleteMany({ userId }),
+      getCollection('watchlists')?.deleteMany({ userId }),
+      getCollection('watchlist_items')?.deleteMany({ watchlistId: { $exists: true } }),
+      getCollection('portfolio_positions')?.deleteMany({ userId }),
+      getCollection('recommendation_log')?.deleteMany({ userId }),
+      getCollection('virtual_trades')?.deleteMany({ userId }),
+      getCollection('notifications')?.deleteMany({ userId }),
+      getCollection('push_subscriptions')?.deleteMany({ userId }),
+    ])
+    const wlCol = getCollection('watchlists')
+    if (wlCol) {
+      const wls = await wlCol.find({ userId }).toArray()
+      if (wls.length) {
+        const ids = wls.map(w => w._id)
+        await getCollection('watchlist_items')?.deleteMany({ watchlistId: { $in: ids } })
+      }
+    }
+    res.json({ ok: true, deleted: userId })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ─── Portfolio ────────────────────────────────────────────────────────────────
 
 app.get('/api/portfolio', async (req, res) => {
@@ -251,43 +280,23 @@ app.get('/api/actions/pending', async (req, res) => {
   }
 })
 
-app.get('/api/actions/approved', async (req, res) => {
+app.get('/api/actions/completed', async (req, res) => {
   try {
     const { userId, limit } = req.query
     if (!userId) return res.status(400).json({ error: 'userId is required' })
-    res.json(await getRecommendationsByStatus(userId, 'approved', limit ? Number(limit) : 50))
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-app.get('/api/actions/executed', async (req, res) => {
-  try {
-    const { userId, limit } = req.query
-    if (!userId) return res.status(400).json({ error: 'userId is required' })
-    res.json(await getRecommendationsByStatus(userId, 'executed', limit ? Number(limit) : 50))
+    const col = getCollection('recommendation_log')
+    if (!col) return res.json([])
+    const results = await col.find({
+      userId,
+      status: { $in: ['executed', 'approved', 'rejected', 'expired'] }
+    }).sort({ created_at: -1 }).limit(limit ? Number(limit) : 50).toArray()
+    res.json(results)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
 app.post('/api/actions/:id/approve', async (req, res) => {
-  try {
-    res.json(await approveRecommendation(req.params.id))
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-app.post('/api/actions/:id/reject', async (req, res) => {
-  try {
-    res.json(await rejectRecommendation(req.params.id))
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-app.post('/api/actions/:id/execute', async (req, res) => {
   try {
     const col = getCollection('recommendation_log')
     const { ObjectId } = await import('mongodb')
@@ -297,8 +306,14 @@ app.post('/api/actions/:id/execute', async (req, res) => {
     if (!rec) return res.status(404).json({ error: 'Recommendation not found' })
 
     const action = rec.signal === 'BUY' ? 'BUY' : rec.signal === 'EXIT' ? 'SELL' : null
-    if (!action) return res.status(400).json({ error: `Signal ${rec.signal} is not executable as a trade` })
 
+    // For non-tradeable signals (HOLD, WATCH, REBALANCE), just mark as executed
+    if (!action) {
+      const result = await executeRecommendation(req.params.id)
+      return res.json({ recommendation: result, trade: null, sizing: null })
+    }
+
+    // For BUY/EXIT — approve AND execute in one step
     const price_doc = await get_latest_price(rec.ticker)
     const price = price_doc?.price
     if (!price) return res.status(422).json({ error: `No current price for ${rec.ticker}` })
@@ -325,6 +340,14 @@ app.post('/api/actions/:id/execute', async (req, res) => {
     })
 
     res.json({ recommendation: executed, trade, sizing })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/actions/:id/reject', async (req, res) => {
+  try {
+    res.json(await rejectRecommendation(req.params.id))
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -598,6 +621,80 @@ app.post('/api/notifications/read-all', async (req, res) => {
     if (!userId) return res.status(400).json({ error: 'userId is required' })
     await markAllRead(userId)
     res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── Onboarding Complete ──────────────────────────────────────────────────────
+
+app.post('/api/onboarding/complete', requireAuth, async (req, res) => {
+  try {
+    const userId = req.userId
+    const { risk, horizon, sectors, watchlist } = req.body
+
+    // Map onboarding answers to preference values
+    const riskMap = { Conservative: 'conservative', Moderate: 'moderate', Aggressive: 'aggressive' }
+    const horizonMap = { 'Short (< 1 year)': 'short', 'Medium (1-5 years)': 'medium', 'Long (5+ years)': 'long' }
+
+    // Update user profile
+    const usersCol = getCollection('users')
+    if (usersCol) {
+      const userUpdates = {}
+      if (risk && riskMap[risk]) userUpdates.risk_tolerance = riskMap[risk]
+      if (horizon && horizonMap[horizon]) userUpdates.investment_horizon = horizonMap[horizon]
+      if (sectors) userUpdates.preferred_sectors = [sectors]
+      userUpdates.onboarding_completed = true
+      userUpdates.updated_at = new Date()
+      await usersCol.updateOne({ _id: userId }, { $set: userUpdates })
+    }
+
+    // Update agent_preferences
+    const prefUpdates = {}
+    if (risk && riskMap[risk]) prefUpdates.risk_tolerance = riskMap[risk]
+    if (horizon && horizonMap[horizon]) prefUpdates.investment_horizon = horizonMap[horizon]
+    if (sectors) prefUpdates.preferred_sectors = [sectors]
+    if (Object.keys(prefUpdates).length > 0) {
+      await updatePreferences(userId, prefUpdates)
+    }
+
+    // Create watchlist and add tickers
+    let watchlistResult = null
+    if (watchlist && watchlist !== 'Skipped' && watchlist.length > 0) {
+      const wl = await createWatchlist({ userId, name: 'My Watchlist' })
+      const tickers = typeof watchlist === 'string' ? watchlist.split(',').map(t => t.trim()).filter(Boolean) : watchlist
+      for (const ticker of tickers) {
+        await addWatchlistItem({ watchlistId: wl._id, ticker, sector: sectors || null })
+      }
+      watchlistResult = { id: wl._id, name: wl.name, tickers }
+    }
+
+    res.json({ ok: true, watchlist: watchlistResult })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── Stock Search (Twelve Data Symbol Search) ─────────────────────────────────
+
+app.get('/api/stocks/search', requireAuth, async (req, res) => {
+  try {
+    const { q } = req.query
+    if (!q || q.length < 2) return res.json([])
+    const apiKey = process.env.TWELVEDATA_API_KEY
+    if (!apiKey) return res.status(503).json({ error: 'Stock search unavailable (no API key)' })
+    const url = `https://api.twelvedata.com/symbol_search?symbol=${encodeURIComponent(q)}&outputsize=10&apikey=${apiKey}`
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) })
+    if (!resp.ok) return res.status(502).json({ error: 'Twelve Data API error' })
+    const json = await resp.json()
+    const results = (json.data || []).slice(0, 10).map(item => ({
+      symbol: item.symbol,
+      name: item.instrument_name,
+      exchange: item.exchange,
+      country: item.country,
+      type: item.instrument_type,
+    }))
+    res.json(results)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

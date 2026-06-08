@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { SignalCard } from "@/components/signals/SignalCard"
 import { EmptyState } from "@/components/common/EmptyState"
 import { fetchSignals, patchSignalFeedback } from "@/lib/api"
+import { emitSignalsChanged, onSignalsChanged, onActionsChanged } from "@/lib/events"
 
 
 
@@ -44,6 +45,7 @@ export function SignalCenterPage() {
   const [minConf, setMinConf]   = useState([0])
 
   useEffect(() => {
+    if (!userId) return
     fetchSignals(userId, { limit: 100 })
       .then(recs => setSignals(recs.map(toSignalShape)))
       .catch(err => {
@@ -51,7 +53,20 @@ export function SignalCenterPage() {
         toast.error('Could not load signals', { description: err.message })
       })
       .finally(() => setLoading(false))
-  }, [])
+  }, [userId])
+
+  // Listen for cross-component changes (e.g. action approved in Actions page)
+  useEffect(() => {
+    if (!userId) return
+    const reload = () => {
+      fetchSignals(userId, { limit: 100 })
+        .then(recs => setSignals(recs.map(toSignalShape)))
+        .catch(() => {})
+    }
+    const unsub1 = onSignalsChanged(reload)
+    const unsub2 = onActionsChanged(reload)
+    return () => { unsub1(); unsub2() }
+  }, [userId])
 
   const handleAction = async (action, signal) => {
     const map = { Confirm: 'confirmed', Ignore: 'ignored', Snooze: 'snoozed' }
@@ -60,6 +75,7 @@ export function SignalCenterPage() {
     setSignals(prev => prev.map(s => s.id === signal.id ? { ...s, user_action } : s))
     try {
       await patchSignalFeedback(signal.id, user_action)
+      emitSignalsChanged()
     } catch (err) {
       console.error('feedback patch failed:', err.message)
     }
@@ -91,7 +107,7 @@ export function SignalCenterPage() {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search ticker…"
-                className="h-11 rounded-xl border-white/10 bg-black/30 pl-10"
+                className="h-11 rounded-md border-white/10 bg-black/30 pl-10"
               />
             </div>
           </div>
@@ -106,7 +122,7 @@ export function SignalCenterPage() {
       </Card>
 
       <Tabs defaultValue="cards" className="space-y-4">
-        <TabsList className="rounded-xl border border-white/10 bg-black/30">
+        <TabsList className="rounded-md border border-white/10 bg-black/30">
           <TabsTrigger value="cards" className="rounded-lg data-[state=active]:bg-emerald-500/20">Cards</TabsTrigger>
           <TabsTrigger value="timeline" className="rounded-lg data-[state=active]:bg-emerald-500/20">Timeline</TabsTrigger>
         </TabsList>
@@ -133,7 +149,7 @@ export function SignalCenterPage() {
           <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
             <CardContent className="space-y-4 p-5">
               {loading
-                ? [...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 rounded-xl bg-white/5" />)
+                ? [...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 rounded-md bg-white/5" />)
                 : filtered.map((s, i) => (
                   <motion.div
                     key={s.id}

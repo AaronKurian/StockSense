@@ -17,13 +17,13 @@ export function RecommendationBreakdown({ signal }) {
       <CardContent className="space-y-4">
         <ConfidenceMeter value={signal.confidence} />
         <div className="grid gap-3 text-xs md:grid-cols-2">
-          <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+          <div className="rounded-md border border-white/10 bg-black/30 p-3">
             <p className="text-muted-foreground">Target zone</p>
             <p className="mt-1 font-mono text-sm">
               {signal.targetZone ? `${signal.targetZone.low} – ${signal.targetZone.high}` : "-"}
             </p>
           </div>
-          <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+          <div className="rounded-md border border-white/10 bg-black/30 p-3">
             <p className="text-muted-foreground">Stop / risk control</p>
             <p className="mt-1 font-mono text-sm">{signal.stopLoss ?? "-"}</p>
           </div>

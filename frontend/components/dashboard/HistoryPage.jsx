@@ -31,6 +31,7 @@ export function HistoryPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    if (!userId) return
     fetchSignals(userId, { limit: 100 })
       .then(setRecs)
       .catch(err => {
@@ -38,7 +39,7 @@ export function HistoryPage() {
         toast.error('Could not load history', { description: err.message })
       })
       .finally(() => setLoading(false))
-  }, [])
+  }, [userId])
 
   // Derived stats from real data
   const total       = recs.length
@@ -89,7 +90,7 @@ export function HistoryPage() {
         <CardContent className="overflow-x-auto">
           {loading ? (
             <div className="space-y-2">
-              {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-12 rounded-xl bg-white/5" />)}
+              {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-12 rounded-md bg-white/5" />)}
             </div>
           ) : recs.length === 0 ? (
             <p className="text-sm text-muted-foreground">

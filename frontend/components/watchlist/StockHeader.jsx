@@ -45,7 +45,7 @@ export function StockHeader({ stock, signal }) {
           ["P/E", String(stock.pe)],
           ["Mkt cap", `${stock.mcapCr.toLocaleString("en-IN")} Cr`],
         ].map(([k, v]) => (
-          <div key={k} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+          <div key={k} className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2">
             <p className="text-muted-foreground">{k}</p>
             <p className="mt-1 font-medium text-foreground">{v}</p>
           </div>

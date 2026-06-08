@@ -52,14 +52,14 @@ export function NotificationCard({ notification, onAction }) {
         </CardContent>
         <CardFooter className="flex flex-wrap gap-2 border-t border-white/10 bg-black/20 px-4 py-3">
           {notification.actions.includes("confirm") && (
-            <Button size="sm" className="rounded-xl" onClick={() => on("Confirmed")}>
+            <Button size="sm" className="rounded-md" onClick={() => on("Confirmed")}>
               Confirm
             </Button>
           )}
-          <Button size="sm" variant="outline" className="rounded-xl border-white/15" onClick={() => on("Dismissed")}>
+          <Button size="sm" variant="outline" className="rounded-md border-white/15" onClick={() => on("Dismissed")}>
             Dismiss
           </Button>
-          <Button size="sm" variant="secondary" className="rounded-xl" onClick={() => on("Details")}>
+          <Button size="sm" variant="secondary" className="rounded-md" onClick={() => on("Details")}>
             View details
           </Button>
         </CardFooter>

@@ -282,8 +282,10 @@ export async function saveRecommendation({ userId, ticker, signal, confidence = 
   if (user_action != null && !VALID_USER_ACTIONS.has(user_action)) throw new Error('invalid user_action')
 
   const t = String(ticker).toUpperCase()
-  const numericConf = confidence != null ? Number(confidence) : null
+  let numericConf = confidence != null ? Number(confidence) : null
   if (numericConf != null && !Number.isFinite(numericConf)) throw new Error('invalid confidence')
+  // Normalize: if agent sends 75 instead of 0.75, convert to 0-1 range
+  if (numericConf != null && numericConf > 1) numericConf = numericConf / 100
 
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
   const existing = await col.findOne({ userId, ticker: t, signal, status: 'generated', created_at: { $gte: twentyFourHoursAgo } })

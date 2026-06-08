@@ -11,6 +11,7 @@ import { WatchlistTable } from "@/components/watchlist/WatchlistTable"
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed"
 import { PwaInstallBanner } from "@/components/layout/PwaInstallBanner"
 import { fetchSignals, patchSignalFeedback, fetchDashboardMetrics, fetchPortfolioIntelligence, agentScan } from "@/lib/api"
+import { emitSignalsChanged, emitActionsChanged } from "@/lib/events"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -51,6 +52,8 @@ export function DashboardPage() {
       toast.success('Scan complete - check Actions for new signals')
       fetchSignals(userId, { limit: 5 }).then(recs => setSignals(recs.map(toSignalShape))).catch(() => {})
       fetchDashboardMetrics(userId).then(setMetrics).catch(() => {})
+      emitActionsChanged()
+      emitSignalsChanged()
     } catch { toast.error('Scan failed') }
     finally { setScanning(false) }
   }
@@ -67,13 +70,13 @@ export function DashboardPage() {
           </div>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">AI-powered investment operations - signals, portfolio, and autonomous execution.</p>
         </div>
-        <Button onClick={runScan} disabled={scanning} className="rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500 shadow-lg">
+        <Button onClick={runScan} disabled={scanning} className="rounded-md bg-gradient-to-r from-emerald-500 to-blue-500 shadow-lg">
           <Zap className="size-4 mr-1.5" /> {scanning ? 'Scanning…' : 'Run Agent Scan'}
         </Button>
       </div>
 
       {loadingMetrics ? (
-        <div className="grid gap-3 md:grid-cols-5">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20 rounded-xl bg-white/5" />)}</div>
+        <div className="grid gap-3 md:grid-cols-5">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20 rounded-md bg-white/5" />)}</div>
       ) : metrics && (
         <div className="grid gap-3 md:grid-cols-5">
           {[
@@ -83,7 +86,7 @@ export function DashboardPage() {
             { label: 'Win Rate', value: `${metrics.win_rate}%`, icon: Activity, color: 'text-amber-200' },
             { label: 'Pending', value: String(metrics.pending_actions), icon: Zap, color: 'text-purple-300' },
           ].map(m => (
-            <Card key={m.label} className="rounded-xl border-white/10 bg-white/[0.03]">
+            <Card key={m.label} className="rounded-md border-white/10 bg-white/[0.03]">
               <CardContent className="p-3">
                 <div className="flex items-center gap-2">
                   <m.icon className={`size-4 ${m.color}`} />
@@ -185,7 +188,7 @@ export function DashboardPage() {
             ) : (
               signals.map(s => <SignalCard key={s.id} signal={s} onAction={(action, signal) => {
                 const map = { Confirm: 'confirmed', Ignore: 'ignored', Snooze: 'snoozed' }
-                if (map[action]) patchSignalFeedback(signal.id, map[action]).catch(() => {})
+                if (map[action]) patchSignalFeedback(signal.id, map[action]).then(() => emitSignalsChanged()).catch(() => {})
                 if (action === 'Ignore') setSignals(prev => prev.filter(x => x.id !== signal.id))
               }} />)
             )}

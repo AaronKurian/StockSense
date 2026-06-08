@@ -47,7 +47,7 @@ export function SignalCard({ signal, onAction }) {
                 {signal.headline}
               </p>
             </div>
-            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2">
+            <div className="flex items-center gap-2 rounded-md border border-white/10 bg-black/30 px-3 py-2">
               <Zap className="size-4 text-amber-300" />
               <div>
                 <p className="text-[10px] uppercase text-muted-foreground">Urgency</p>
@@ -58,7 +58,7 @@ export function SignalCard({ signal, onAction }) {
           <ConfidenceMeter value={signal.confidence} />
         </CardHeader>
         <CardContent className="space-y-4 pt-0">
-          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+          <div className="rounded-md border border-white/10 bg-black/25 p-4">
             <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
               <Shield className="size-3.5 text-blue-300" />
               AI rationale
@@ -104,16 +104,13 @@ export function SignalCard({ signal, onAction }) {
         </CardContent>
         <CardFooter className="flex flex-wrap gap-2 border-t border-white/10 bg-black/20 px-4 py-4">
           <Button
-            className="rounded-xl bg-emerald-500 text-emerald-950 hover:bg-emerald-400"
+            className="rounded-md bg-emerald-500 text-emerald-950 hover:bg-emerald-400"
             onClick={() => handle("Confirm")}
           >
             Confirm
           </Button>
-          <Button variant="outline" className="rounded-xl border-white/15" onClick={() => handle("Ignore")}>
+          <Button variant="outline" className="rounded-md border-white/15" onClick={() => handle("Ignore")}>
             Ignore
-          </Button>
-          <Button variant="secondary" className="rounded-xl" onClick={() => handle("Snooze")}>
-            Snooze
           </Button>
         </CardFooter>
       </Card>

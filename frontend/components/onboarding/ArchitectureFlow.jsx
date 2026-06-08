@@ -53,7 +53,7 @@ export function ArchitectureFlow() {
             {i < demoArchitectureFlow.length - 1 && (
               <span className="pointer-events-none absolute -right-3 top-1/2 hidden h-px w-6 -translate-y-1/2 bg-gradient-to-r from-emerald-500/50 to-transparent lg:block" />
             )}
-            <div className="mb-3 flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/25 to-blue-500/20 ring-1 ring-white/10">
+            <div className="mb-3 flex size-10 items-center justify-center rounded-md bg-gradient-to-br from-emerald-500/25 to-blue-500/20 ring-1 ring-white/10">
               <Icon className="size-5 text-emerald-200" />
             </div>
             <p className="text-sm font-semibold">{step.label}</p>

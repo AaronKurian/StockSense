@@ -44,7 +44,7 @@ export function ActivityFeed() {
           const color = colorMap[item.type] || 'text-muted-foreground'
           return (
             <motion.div key={item._id || item.id || i} initial={{ opacity: 0, x: -4 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.02 }}
-              className="flex gap-3 rounded-xl border border-white/5 bg-white/[0.02] p-2.5">
+              className="flex gap-3 rounded-md border border-white/5 bg-white/[0.02] p-2.5">
               <div className={`mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-white/5`}>
                 <Icon className={`size-3.5 ${color}`} />
               </div>

@@ -28,6 +28,7 @@ export function WatchlistTable() {
   const [priceMap, setPriceMap] = useState({})
 
   useEffect(() => {
+    if (!userId) return
     fetchWatchlists(userId)
       .then(lists => {
         if (!lists.length) { setLoading(false); return }
@@ -37,7 +38,7 @@ export function WatchlistTable() {
       .then(items => { if (items) setRows(items) })
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [])
+  }, [userId])
 
   // Live price overlay via SSE
   useSSEPrices((data) => {
@@ -47,7 +48,7 @@ export function WatchlistTable() {
   if (loading) {
     return (
       <div className="space-y-2">
-        {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-14 rounded-xl bg-white/5" />)}
+        {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-14 rounded-md bg-white/5" />)}
       </div>
     )
   }

@@ -131,13 +131,13 @@ export function AgentChatPage() {
               onChange={e => setInput(e.target.value)}
               placeholder="Ask about a stock, your portfolio, or request an analysis…"
               aria-label="Agent chat input"
-              className="min-h-[52px] flex-1 resize-none rounded-xl border-white/10 bg-black/30"
+              className="min-h-[52px] flex-1 resize-none rounded-md border-white/10 bg-black/30"
               onKeyDown={e => {
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() }
               }}
               disabled={loading}
             />
-            <Button className="rounded-xl" onClick={() => send()} disabled={loading}>
+            <Button className="rounded-md" onClick={() => send()} disabled={loading}>
               <Send className="size-4" />
             </Button>
           </div>

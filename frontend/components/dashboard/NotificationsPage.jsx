@@ -56,7 +56,7 @@ export function NotificationsPage() {
           <p className="mt-2 text-sm text-muted-foreground">Agent activity, recommendations, and trade executions.</p>
         </div>
         {unread.length > 0 && (
-          <Button variant="outline" size="sm" className="rounded-xl border-white/15" onClick={markAllRead}>
+          <Button variant="outline" size="sm" className="rounded-md border-white/15" onClick={markAllRead}>
             <CheckCheck className="size-3.5 mr-1.5" /> Mark all read
           </Button>
         )}
@@ -66,7 +66,7 @@ export function NotificationsPage() {
         <div className="space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20 rounded-2xl bg-white/5" />)}</div>
       ) : (
         <Tabs defaultValue="all" className="space-y-4">
-          <TabsList className="rounded-xl border border-white/10 bg-black/30">
+          <TabsList className="rounded-md border border-white/10 bg-black/30">
             <TabsTrigger value="all" className="rounded-lg data-[state=active]:bg-emerald-500/20">All ({notifications.length})</TabsTrigger>
             <TabsTrigger value="unread" className="rounded-lg data-[state=active]:bg-emerald-500/20">Unread ({unread.length})</TabsTrigger>
           </TabsList>
@@ -81,7 +81,7 @@ export function NotificationsPage() {
               ) : (
                 (tab === 'all' ? notifications : unread).map(n => (
                   <motion.div key={n._id} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}>
-                    <Card className={`rounded-xl border-white/10 bg-white/[0.03] ${!n.read ? 'ring-1 ring-emerald-500/20' : ''}`} onClick={() => !n.read && markRead(n._id)}>
+                    <Card className={`rounded-md border-white/10 bg-white/[0.03] ${!n.read ? 'ring-1 ring-emerald-500/20' : ''}`} onClick={() => !n.read && markRead(n._id)}>
                       <CardContent className="flex items-start gap-3 p-3">
                         <div className="mt-0.5">
                           {!n.read && <span className="block size-2 rounded-full bg-emerald-400" />}

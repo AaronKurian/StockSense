@@ -3,7 +3,8 @@ import { useEffect, useRef } from 'react'
 const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
 async function apiFetch(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json', ...options.headers }, ...options })
+  const { headers, ...rest } = options
+  const res = await fetch(`${BASE}${path}`, { ...rest, headers: { 'Content-Type': 'application/json', ...headers } })
   const json = await res.json()
   if (!res.ok) throw new Error(json?.error || `API error ${res.status}`)
   return json
@@ -119,12 +120,8 @@ export function fetchActionsPending(userId) {
   return apiFetch(`/api/actions/pending?userId=${encodeURIComponent(userId)}`)
 }
 
-export function fetchActionsApproved(userId) {
-  return apiFetch(`/api/actions/approved?userId=${encodeURIComponent(userId)}`)
-}
-
-export function fetchActionsExecuted(userId) {
-  return apiFetch(`/api/actions/executed?userId=${encodeURIComponent(userId)}`)
+export function fetchActionsCompleted(userId) {
+  return apiFetch(`/api/actions/completed?userId=${encodeURIComponent(userId)}`)
 }
 
 export function approveAction(id) {
@@ -135,16 +132,31 @@ export function rejectAction(id) {
   return apiFetch(`/api/actions/${encodeURIComponent(id)}/reject`, { method: 'POST' })
 }
 
-export function executeAction(id) {
-  return apiFetch(`/api/actions/${encodeURIComponent(id)}/execute`, { method: 'POST' })
-}
-
 export function agentChat(userId, message) {
   return apiFetch('/agent/chat', { method: 'POST', body: JSON.stringify({ userId, message }) })
 }
 
 export function agentScan(userId) {
   return apiFetch('/agent/scan', { method: 'POST', body: JSON.stringify({ userId }) })
+}
+
+export function deleteAccount() {
+  const token = getToken()
+  return apiFetch('/auth/account', { method: 'DELETE', headers: token ? { Authorization: `Bearer ${token}` } : {} })
+}
+
+export function searchStocks(query) {
+  const token = getToken()
+  return apiFetch(`/api/stocks/search?q=${encodeURIComponent(query)}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+}
+
+export function completeOnboarding({ risk, horizon, sectors, watchlist }) {
+  const token = getToken()
+  return apiFetch('/api/onboarding/complete', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: JSON.stringify({ risk, horizon, sectors, watchlist }),
+  })
 }
 
 export function useSSEPrices(onPrice) {

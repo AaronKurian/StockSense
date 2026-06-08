@@ -49,7 +49,7 @@ export function TopNavbar() {
               readOnly
               aria-label="Search tickers, signals, history"
               placeholder="Search tickers, signals, history…"
-              className="h-10 rounded-xl border-white/10 bg-white/5 pl-10"
+              className="h-10 rounded-md border-white/10 bg-white/5 pl-10"
             />
           </div>
         </div>
@@ -65,14 +65,14 @@ export function TopNavbar() {
             <span className="text-muted-foreground">SSE live</span>
           </motion.div>
 
-          <Button asChild size="sm" className="hidden rounded-xl bg-gradient-to-r from-emerald-500 to-blue-500 text-primary-foreground shadow-lg shadow-emerald-500/20 md:inline-flex">
+          <Button asChild size="sm" className="hidden rounded-md bg-gradient-to-r from-emerald-500 to-blue-500 text-primary-foreground shadow-lg shadow-emerald-500/20 md:inline-flex">
             <Link href="/agent">
               <Sparkles className="mr-1.5 size-4" />
               Ask agent
             </Link>
           </Button>
 
-          <Button asChild variant="ghost" size="icon" className="relative rounded-xl" aria-label="Notifications">
+          <Button asChild variant="ghost" size="icon" className="relative rounded-md" aria-label="Notifications">
             <Link href="/notifications">
               <Bell className="size-5" />
               {unread > 0 && <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-emerald-400 ring-2 ring-background" />}
