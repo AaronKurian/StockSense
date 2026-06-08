@@ -25,9 +25,20 @@ export function PwaInstallBanner() {
     }
     checkInstalled()
 
-    if (localStorage.getItem('pwa-install-dismissed')) {
-      console.log('[PWA] Previously dismissed')
+    const dismissed = localStorage.getItem('pwa-install-dismissed')
+
+    const installed =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone
+
+    if (dismissed && installed) {
+      console.log('[PWA] Installed and dismissed')
       return
+    }
+
+    if (dismissed && !installed) {
+      console.log('[PWA] App removed, clearing dismissal')
+      localStorage.removeItem('pwa-install-dismissed')
     }
 
     const beforeInstall = (e) => {
