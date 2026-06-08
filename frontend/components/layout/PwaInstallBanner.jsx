@@ -82,7 +82,7 @@ export function PwaInstallBanner() {
     setShow(false)
   }
 
-  if (false && (isInstalled || !show)) return null
+  if (isInstalled || !show) return null
 
   return (
     <AnimatePresence>
