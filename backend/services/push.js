@@ -36,24 +36,24 @@ export async function unsubscribe(userId, endpoint) {
   return { deletedCount: result.deletedCount }
 }
 
-export async function sendToUser(userId, { title, body, url, entityId, tag, type }) {
+export async function sendToUser(userId, { title, body, url, entityId, tag, type, subtype }) {
   if (!initialized) return { sent: 0, failed: 0, skipped: false }
 
   const prefCol = getCollection('agent_preferences')
   if (prefCol) {
     const prefs = await prefCol.findOne({ userId })
-    if (prefs?.push_enabled === false) return { sent: 0, failed: 0, skipped: true }
+    if (prefs?.push_enabled === false) return { sent: 0, failed: 0, skipped: true, reason: 'push_disabled' }
     const typeMap = { recommendation: 'notify_recommendations', execution: 'notify_executions', rebalancing: 'notify_rebalancing', scan_complete: 'notify_scans' }
     const prefKey = typeMap[type]
-    if (prefKey && prefs?.[prefKey] === false) return { sent: 0, failed: 0, skipped: true }
+    if (prefKey && prefs?.[prefKey] === false) return { sent: 0, failed: 0, skipped: true, reason: `${prefKey}=false` }
   }
 
   const col = getCollection('push_subscriptions')
   if (!col) return { sent: 0, failed: 0 }
   const subs = await col.find({ userId }).toArray()
-  if (!subs.length) return { sent: 0, failed: 0 }
+  if (!subs.length) return { sent: 0, failed: 0, reason: 'no_subscriptions' }
 
-  const payload = JSON.stringify({ title, body, url: url || '/actions', entityId: entityId || null, tag: tag || null })
+  const payload = JSON.stringify({ title, body, url: url || '/actions', entityId: entityId || null, tag: tag || null, subtype: subtype || type || null })
   let sent = 0, failed = 0
   const toRemove = []
 
@@ -68,5 +68,8 @@ export async function sendToUser(userId, { title, body, url, entityId, tag, type
   }
 
   if (toRemove.length) await col.deleteMany({ userId, endpoint: { $in: toRemove } })
+  if (sent > 0 || failed > 0) {
+    console.log(`[push] userId=${userId} type=${type} sent=${sent} failed=${failed}`)
+  }
   return { sent, failed }
 }

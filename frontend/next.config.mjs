@@ -8,7 +8,7 @@ const nextConfig = {
   allowedDevOrigins: [
     'localhost',
     '127.0.0.1',
-    '10.168.70.37',
+    '10.90.167.37',
   ],
   turbopack: {
     root: __dirname,

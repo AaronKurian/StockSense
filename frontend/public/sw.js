@@ -1,15 +1,37 @@
 self.addEventListener('push', (event) => {
   if (!event.data) return
   const data = event.data.json()
+
+  // Subtype-specific badge text
+  const subtypeBadge = {
+    buy: '📈',
+    sell: '📉',
+    stop_loss: '🛑',
+    take_profit: '💰',
+    trailing_stop: '📊',
+    rebalance: '⚖️',
+    recommendation: '💡',
+    scan_complete: '✅',
+  }
+
   const options = {
     body: data.body || '',
     icon: '/favicon.png',
     badge: '/favicon.png',
     tag: data.tag || 'stocksense',
-    data: { url: data.url || '/dashboard', entityId: data.entityId || null },
-    requireInteraction: true,
+    data: {
+      url: data.url || '/dashboard',
+      entityId: data.entityId || null,
+      subtype: data.subtype || null,
+    },
+    requireInteraction: data.subtype === 'stop_loss' || data.subtype === 'trailing_stop',
+    actions: data.subtype === 'buy' || data.subtype === 'sell'
+      ? [{ action: 'view', title: 'View Trade' }]
+      : [{ action: 'open', title: 'Open StockSense' }],
   }
-  event.waitUntil(self.registration.showNotification(data.title || 'StockSense', options))
+
+  const title = `${subtypeBadge[data.subtype] || '🔔'} ${data.title || 'StockSense'}`
+  event.waitUntil(self.registration.showNotification(title, options))
 })
 
 self.addEventListener('notificationclick', (event) => {

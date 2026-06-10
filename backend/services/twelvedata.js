@@ -20,3 +20,16 @@ export async function fetchTimeSeries(ticker, interval = '1day', outputsize = 30
   if (json.status === 'error') throw new Error(`Twelve Data: ${json.message || JSON.stringify(json)}`)
   return json
 }
+
+export async function fetchQuote(ticker) {
+  const url = `${BASE}/quote?symbol=${encodeURIComponent(ticker)}&apikey=${getApiKey()}`
+  const resp = await fetch(url, { signal: AbortSignal.timeout(8000) })
+  if (!resp.ok) return null
+  const json = await resp.json()
+  if (json.status === 'error' || !json.close) return null
+  return {
+    price: Number(json.close),
+    volume: json.volume ? Number(json.volume) : null,
+    change_percent: json.percent_change ? Number(json.percent_change) : null,
+  }
+}

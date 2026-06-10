@@ -1,14 +1,36 @@
 import { getCollection } from '../config/db.js'
-import { fetchTimeSeries } from './twelvedata.js'
-import { getLatestPricesBatch } from './prices.js'
+import { fetchTimeSeries, fetchQuote } from './twelvedata.js'
+import { getLatestPricesBatch, upsertLatestPrice } from './prices.js'
 import { createNotification } from './notifications.js'
+import { subscribeToTickers } from './websocket.js'
+import { info as logInfo, warn as logWarn } from '../lib/logger.js'
+import { migrateSectorFields, parseAndValidateSectors, applySectorPreferenceBonus, mergePreferredSectors } from '../lib/sectors.js'
+import { getPreferences } from './preferences.js'
+import { getTickerMetadata } from './metadata.js'
 
 const VALID_SIGNALS = new Set(['BUY', 'HOLD', 'EXIT', 'WATCH', 'REBALANCE'])
 const VALID_USER_ACTIONS = new Set(['confirmed', 'ignored', 'snoozed'])
-const GEMINI_MODEL = 'gemini-3.5-flash'
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
 
-function warn(msg) { console.warn('[agent] ' + msg) }
+const VERTEX_PROJECT = process.env.GOOGLE_CLOUD_PROJECT || 'stocksense-13'
+const VERTEX_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'
+const VERTEX_MODEL = 'gemini-2.5-flash'
+const VERTEX_ENDPOINT = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/${VERTEX_MODEL}:generateContent`
+
+const TICKER_DELAY_MS = Number(process.env.AGENT_TICKER_DELAY_MS ?? 2000)
+const GEMINI_MAX_RETRIES = Number(process.env.AGENT_GEMINI_MAX_RETRIES ?? 3)
+const GEMINI_RETRY_BASE_MS = Number(process.env.AGENT_GEMINI_RETRY_BASE_MS ?? 5000)
+const SIGNAL_CACHE_MINUTES = Number(process.env.AGENT_SIGNAL_CACHE_MINUTES ?? 30)
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
+function isRateLimitError(err) {
+  if (!err) return false
+  if (err.status === 429 || err.code === 429) return true
+  const m = String(err.message || '').toLowerCase()
+  return m.includes('429') || m.includes('resource_exhausted') || m.includes('rate limit') || m.includes('quota')
+}
+
+function warn(msg) { logWarn('agent', msg) }
 
 function normalizeTicker(ticker) {
   if (!ticker) throw new Error('ticker is required')
@@ -32,12 +54,18 @@ async function resolveObjectId(id) {
   try { return new ObjectId(id) } catch { return id }
 }
 
-// ─── Users ────────────────────────────────────────────────────────────────────
-
 export async function get_user_profile(userId) {
   const col = getCollection('users')
   if (!col) return null
-  return await col.findOne({ _id: userId }) || null
+  const user = await col.findOne({ _id: userId }) || null
+  if (!user) return null
+  const { sectors, migrated, hadLegacy } = migrateSectorFields(user)
+  if (migrated || hadLegacy) {
+    const update = { $set: { preferred_sectors: sectors, updated_at: new Date() } }
+    if (hadLegacy) update.$unset = { preferred_sector: '' }
+    await col.updateOne({ _id: userId }, update)
+  }
+  return { ...user, preferred_sectors: sectors }
 }
 
 export async function createUserProfile({ userId, email, name = null, risk_tolerance = 'moderate', investment_horizon = 'medium', preferred_sectors = [], experience_level = 'intermediate' }) {
@@ -85,8 +113,11 @@ export async function updateUserProfile(userId, updates = {}) {
     if (!HORIZON.has(updates.investment_horizon)) throw new Error('invalid investment_horizon')
     set.investment_horizon = updates.investment_horizon
   }
+  if (updates.preferred_sector != null && updates.preferred_sectors == null) {
+    updates.preferred_sectors = [updates.preferred_sector]
+  }
   if (updates.preferred_sectors != null) {
-    set.preferred_sectors = Array.isArray(updates.preferred_sectors) ? updates.preferred_sectors.map(s => String(s).trim()).filter(Boolean) : []
+    set.preferred_sectors = parseAndValidateSectors(updates.preferred_sectors, { allowEmpty: true })
   }
   if (updates.experience_level != null) {
     if (!EXP.has(updates.experience_level)) throw new Error('invalid experience_level')
@@ -97,8 +128,6 @@ export async function updateUserProfile(userId, updates = {}) {
   const res = await col.findOneAndUpdate({ _id: userId }, { $set: set }, { returnDocument: 'after' })
   return res.value
 }
-
-// ─── Watchlists ───────────────────────────────────────────────────────────────
 
 export async function get_watchlist(userId) {
   const col = getCollection('watchlists')
@@ -169,6 +198,8 @@ export async function addWatchlistItem({ watchlistId, ticker, sector = null }) {
   const t = normalizeTicker(ticker)
   const doc = { watchlistId: resolvedId, ticker: t, sector: sector ? String(sector).trim() || null : null }
   const res = await col.updateOne({ watchlistId: resolvedId, ticker: t }, { $set: doc }, { upsert: true })
+
+  try { subscribeToTickers([t]) } catch {}
   return { ...doc, upsertedId: res.upsertedId || null }
 }
 
@@ -180,8 +211,6 @@ export async function removeWatchlistItem({ watchlistId, ticker }) {
   return { deletedCount: result.deletedCount }
 }
 
-// ─── Portfolio ────────────────────────────────────────────────────────────────
-
 export async function get_portfolio(userId) {
   const col = getCollection('portfolio_positions')
   if (!col) return null
@@ -191,7 +220,22 @@ export async function get_portfolio(userId) {
 export async function get_latest_price(ticker) {
   const col = getCollection('latest_prices')
   if (!col) return null
-  return await col.findOne({ ticker: normalizeTicker(ticker) }) || null
+  const t = normalizeTicker(ticker)
+  const cached = await col.findOne({ ticker: t })
+  if (cached?.price != null) return cached
+
+  try {
+    logWarn('prices', `WebSocket price missing for ${t}, using REST fallback`)
+    const quote = await fetchQuote(t)
+    if (quote?.price) {
+      const doc = await upsertLatestPrice(t, { price: quote.price, volume: quote.volume, change_percent: quote.change_percent })
+      logInfo('prices', `Fetched fallback quote for ${t}: $${quote.price}`)
+      return doc
+    }
+  } catch (err) {
+    logWarn('prices', `REST fallback failed for ${t}: ${err.message}`)
+  }
+  return cached || null
 }
 
 export async function addPosition({ userId, ticker, quantity, average_price, sector = null }) {
@@ -271,8 +315,6 @@ export async function calculateSectorAllocation(userId) {
   return allocation
 }
 
-// ─── Recommendations ──────────────────────────────────────────────────────────
-
 export async function saveRecommendation({ userId, ticker, signal, confidence = null, rationale = '', supporting_factors = [], risks = [], user_action = null }) {
   const col = getCollection('recommendation_log')
   if (!col) throw new Error('MongoDB not connected')
@@ -284,7 +326,7 @@ export async function saveRecommendation({ userId, ticker, signal, confidence = 
   const t = String(ticker).toUpperCase()
   let numericConf = confidence != null ? Number(confidence) : null
   if (numericConf != null && !Number.isFinite(numericConf)) throw new Error('invalid confidence')
-  // Normalize: if agent sends 75 instead of 0.75, convert to 0-1 range
+
   if (numericConf != null && numericConf > 1) numericConf = numericConf / 100
 
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
@@ -321,6 +363,9 @@ export async function expireStaleRecommendations() {
     { status: 'generated', created_at: { $lt: fortyEightHoursAgo } },
     { $set: { status: 'expired', expired_at: new Date() } }
   )
+  if (result.modifiedCount > 0) {
+    logInfo('expire', `Expired ${result.modifiedCount} stale recommendation(s)`)
+  }
   return result.modifiedCount
 }
 
@@ -414,11 +459,15 @@ export async function recordFeedback(recId, user_action) {
   return res.value
 }
 
-// ─── Price Context ────────────────────────────────────────────────────────────
-
 export async function get_price_context(ticker) {
   if (!ticker) throw new Error('ticker required')
-  const ts = await fetchTimeSeries(ticker, '1day', 250)
+  let ts
+  try {
+    ts = await fetchTimeSeries(ticker, '1day', 250)
+  } catch (err) {
+
+    return null
+  }
   if (!ts?.values?.length) return null
 
   const values = ts.values.map(v => ({ close: Number(v.close), volume: Number(v.volume || 0) }))
@@ -458,8 +507,6 @@ export async function get_price_context(ticker) {
   }
 }
 
-// ─── Market News ──────────────────────────────────────────────────────────────
-
 export async function get_market_news(ticker) {
   if (!ticker) throw new Error('ticker required')
   const t = String(ticker).trim().toUpperCase()
@@ -479,8 +526,6 @@ export async function get_market_news(ticker) {
   }).filter(Boolean)
 }
 
-// ─── Gemini ───────────────────────────────────────────────────────────────────
-
 function validateGeminiOutput(output) {
   if (!output || typeof output !== 'object' || Array.isArray(output)) throw new Error('Gemini returned invalid JSON')
   if (!VALID_SIGNALS.has(output.signal)) throw new Error('Gemini returned invalid signal')
@@ -495,15 +540,26 @@ function validateGeminiOutput(output) {
   }
 }
 
-export async function callGemini({ user_profile, portfolio, watchlist, latest_price, price_context, market_news } = {}) {
-  if (!process.env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured')
+import { GoogleAuth } from 'google-auth-library'
+
+const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] })
+
+async function getAccessToken() {
+  const client = await auth.getClient()
+  const { token } = await client.getAccessToken()
+  if (!token) throw new Error('Failed to obtain Vertex AI access token via ADC')
+  return token
+}
+
+async function callGeminiOnce({ user_profile, portfolio, watchlist, latest_price, price_context, market_news } = {}) {
+  const accessToken = await getAccessToken()
 
   const systemInstruction = 'You are StockSense, an investment reasoning engine. Return only strict JSON matching the schema. Do not include markdown, code fences, extra keys, or commentary. Use the supplied portfolio, watchlist, latest_price, price_context, and market_news to make one concise decision.'
   const context = JSON.stringify({ user_profile, portfolio, watchlist, latest_price, price_context, market_news } ?? null, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2)
 
-  const response = await fetch(GEMINI_ENDPOINT, {
+  const response = await fetch(VERTEX_ENDPOINT, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: systemInstruction }] },
       contents: [{ role: 'user', parts: [{ text: `Analyze the following context and return only the decision JSON.\nContext:\n${context}` }] }],
@@ -520,18 +576,38 @@ export async function callGemini({ user_profile, portfolio, watchlist, latest_pr
             risks: { type: 'array', items: { type: 'string' } }
           }
         },
-        thinkingConfig: { thinkingBudget: 512 }
       }
     })
   })
 
   const payload = await response.json()
-  if (!response.ok) throw new Error(payload?.error?.message || `Gemini HTTP ${response.status}`)
+  if (!response.ok) {
+    const errMsg = payload?.error?.message || payload?.error?.status || `Vertex AI HTTP ${response.status}`
+    const err = new Error(errMsg)
+    err.status = response.status
+    throw err
+  }
   const text = payload?.candidates?.[0]?.content?.parts?.map(p => p?.text || '').join('')?.trim()
-  if (!text) throw new Error('Gemini returned empty response')
+  if (!text) throw new Error('Vertex AI returned empty response')
   let parsed
-  try { parsed = JSON.parse(text) } catch { throw new Error('Gemini returned non-JSON output') }
+  try { parsed = JSON.parse(text) } catch { throw new Error('Vertex AI returned non-JSON output') }
   return validateGeminiOutput(parsed)
+}
+
+export async function callGemini(input = {}) {
+  let lastErr
+  for (let attempt = 1; attempt <= GEMINI_MAX_RETRIES; attempt++) {
+    try {
+      return await callGeminiOnce(input)
+    } catch (err) {
+      lastErr = err
+      if (!isRateLimitError(err) || attempt === GEMINI_MAX_RETRIES) throw err
+      const waitMs = GEMINI_RETRY_BASE_MS * Math.pow(3, attempt - 1)
+      logWarn('agent', `Gemini rate-limited (attempt ${attempt}/${GEMINI_MAX_RETRIES}) — backing off ${Math.round(waitMs / 1000)}s`)
+      await sleep(waitMs)
+    }
+  }
+  throw lastErr
 }
 
 export async function generateSignal(ticker, { user_profile, portfolio, watchlist_items, latest_price, price_context, market_news }) {
@@ -540,22 +616,53 @@ export async function generateSignal(ticker, { user_profile, portfolio, watchlis
   return { ticker: String(ticker).toUpperCase(), ...result }
 }
 
-// ─── Agent Pipeline ───────────────────────────────────────────────────────────
+export async function getScanTickers(userId) {
+  if (!userId) return []
+  const [portfolio, watchlistItems] = await Promise.all([get_portfolio(userId), get_watchlist(userId)])
+  const set = new Set()
+  if (Array.isArray(portfolio)) for (const p of portfolio) if (p.ticker) set.add(p.ticker)
+  if (Array.isArray(watchlistItems)) for (const w of watchlistItems) if (w.ticker) set.add(w.ticker)
+  return [...set]
+}
 
 export async function runAgentForUser(userId) {
   if (!userId) throw new Error('userId required')
 
   const user_profile = await get_user_profile(userId)
-  if (!user_profile) warn(`No user profile for ${userId}`)
+  if (!user_profile) {
+    logWarn('agent', `No user profile for ${userId} — user may not exist`)
+    return []
+  }
+  const prefs = await getPreferences(userId)
+  const preferredSectors = mergePreferredSectors(user_profile.preferred_sectors, prefs?.preferred_sectors)
   const portfolio = await get_portfolio(userId)
   const watchlistItems = await get_watchlist(userId)
 
   const tickerSet = new Set()
   if (Array.isArray(portfolio)) for (const p of portfolio) if (p.ticker) tickerSet.add(p.ticker)
   if (Array.isArray(watchlistItems)) for (const w of watchlistItems) if (w.ticker) tickerSet.add(w.ticker)
-  if (!tickerSet.size) { warn(`No tickers for ${userId}`); return [] }
+  if (!tickerSet.size) {
+    logWarn('agent', `No tickers for ${userId} — portfolio: ${portfolio?.length || 0}, watchlist: ${watchlistItems?.length || 0}`)
+    return []
+  }
 
-  const tickers = [...tickerSet]
+  const allTickers = [...tickerSet]
+
+  const cacheCutoff = new Date(Date.now() - SIGNAL_CACHE_MINUTES * 60 * 1000)
+  const recentRecs = SIGNAL_CACHE_MINUTES > 0 ? await getLatestRecommendationsForTickers(userId, allTickers) : new Map()
+  const results = []
+  const tickers = []
+  for (const ticker of allTickers) {
+    const recent = recentRecs.get(ticker)
+    if (recent && recent.created_at && new Date(recent.created_at) >= cacheCutoff) {
+      results.push({ ticker, cached: true })
+      continue
+    }
+    tickers.push(ticker)
+  }
+  const cachedCount = allTickers.length - tickers.length
+  logInfo('agent', `Scanning ${tickers.length} ticker(s) for ${userId}${cachedCount ? ` (${cachedCount} cached/skipped)` : ''}: ${tickers.join(', ') || '—'}`)
+  if (!tickers.length) return results
 
   const contextResults = await Promise.allSettled(tickers.map(async (ticker) => {
     const [latest_price, price_context, market_news] = await Promise.allSettled([
@@ -571,17 +678,25 @@ export async function runAgentForUser(userId) {
     }
   }))
 
-  const results = []
-  for (const settled of contextResults) {
-    if (settled.status !== 'fulfilled') continue
-    const { ticker, latest_price, price_context, market_news } = settled.value
+  const fulfilled = contextResults.filter(s => s.status === 'fulfilled').map(s => s.value)
+  for (let i = 0; i < fulfilled.length; i++) {
+    const { ticker, latest_price, price_context, market_news } = fulfilled[i]
 
     let recommendation
     try {
       recommendation = await generateSignal(ticker, { user_profile, portfolio, watchlist_items: watchlistItems, latest_price, price_context, market_news })
+      if (recommendation.confidence != null && preferredSectors.length) {
+        const meta = await getTickerMetadata(ticker)
+        recommendation.confidence = applySectorPreferenceBonus(
+          recommendation.confidence,
+          meta.sector,
+          preferredSectors
+        )
+      }
     } catch (err) {
       warn(`generateSignal failed for ${ticker}: ${err.message}`)
       results.push({ ticker, error: err.message })
+      if (i < fulfilled.length - 1 && TICKER_DELAY_MS > 0) await sleep(TICKER_DELAY_MS)
       continue
     }
 
@@ -592,6 +707,8 @@ export async function runAgentForUser(userId) {
       warn(`saveRecommendation failed for ${ticker}: ${err.message}`)
       results.push(recommendation)
     }
+
+    if (i < fulfilled.length - 1 && TICKER_DELAY_MS > 0) await sleep(TICKER_DELAY_MS)
   }
   return results
 }

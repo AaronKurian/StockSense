@@ -1,18 +1,23 @@
 import { getCollection } from '../config/db.js'
+import { migrateSectorFields, parseAndValidateSectors } from '../lib/sectors.js'
 
 const VALID_RISK = new Set(['conservative', 'moderate', 'aggressive'])
 const VALID_HORIZON = new Set(['short', 'medium', 'long'])
-const VALID_FREQUENCY = new Set(['realtime', 'hourly', 'daily', 'weekly'])
-const VALID_MODE = new Set(['default', 'agentic'])
+const VALID_FREQUENCY = new Set(['5min', '15min', '30min', 'hourly', 'daily'])
+const VALID_MODE = new Set(['manual', 'agentic'])
 
 const DEFAULT_PREFERENCES = {
-  mode: 'default',
+  mode: 'agentic',
   enabled: true,
   risk_tolerance: 'moderate',
   investment_horizon: 'medium',
-  max_position_size_pct: 25,
-  stop_loss_pct: 10,
-  take_profit_pct: 20,
+  max_position_size_pct: 20,
+  cash_reserve_pct: 10,
+  stop_loss_pct: 12,
+  take_profit_pct: 25,
+  trailing_stop_pct: 10,
+  max_stocks: 15,
+  max_sector_exposure_pct: 40,
   rebalance_threshold_pct: 5,
   signal_frequency: 'hourly',
   min_confidence: 0.7,
@@ -25,13 +30,25 @@ const DEFAULT_PREFERENCES = {
   notify_scans: false,
 }
 
+async function persistSectorMigration(col, userId, sectors, hadLegacy) {
+  const update = { $set: { preferred_sectors: sectors, updated_at: new Date() } }
+  if (hadLegacy) update.$unset = { preferred_sector: '' }
+  await col.updateOne({ userId }, update)
+}
+
 export async function getPreferences(userId) {
   const col = getCollection('agent_preferences')
   if (!col) throw new Error('MongoDB not connected')
   if (!userId) throw new Error('userId is required')
   const stored = await col.findOne({ userId })
   if (!stored) return null
-  return { ...DEFAULT_PREFERENCES, ...stored }
+
+  const { sectors, migrated, hadLegacy } = migrateSectorFields(stored)
+  if (migrated || hadLegacy) {
+    await persistSectorMigration(col, userId, sectors, hadLegacy)
+  }
+
+  return { ...DEFAULT_PREFERENCES, ...stored, preferred_sectors: sectors }
 }
 
 export async function createDefaultPreferences(userId) {
@@ -65,8 +82,17 @@ export async function updatePreferences(userId, updates = {}) {
     if (!VALID_HORIZON.has(updates.investment_horizon)) throw new Error('invalid investment_horizon')
     set.investment_horizon = updates.investment_horizon
   }
-  if (updates.preferred_sectors != null) set.preferred_sectors = Array.isArray(updates.preferred_sectors) ? updates.preferred_sectors : []
-  if (updates.excluded_sectors != null) set.excluded_sectors = Array.isArray(updates.excluded_sectors) ? updates.excluded_sectors : []
+  if (updates.preferred_sector != null && updates.preferred_sectors == null) {
+    updates.preferred_sectors = [updates.preferred_sector]
+  }
+  let unsetLegacySector = false
+  if (updates.preferred_sectors != null) {
+    set.preferred_sectors = parseAndValidateSectors(updates.preferred_sectors, { allowEmpty: true })
+    unsetLegacySector = true
+  }
+  if (updates.excluded_sectors != null) {
+    set.excluded_sectors = parseAndValidateSectors(updates.excluded_sectors, { allowEmpty: true })
+  }
   if (updates.max_position_size_pct != null) {
     const v = Number(updates.max_position_size_pct)
     if (!Number.isFinite(v) || v < 1 || v > 100) throw new Error('invalid max_position_size_pct')
@@ -87,6 +113,26 @@ export async function updatePreferences(userId, updates = {}) {
     if (!Number.isFinite(v) || v < 1 || v > 50) throw new Error('invalid rebalance_threshold_pct')
     set.rebalance_threshold_pct = v
   }
+  if (updates.cash_reserve_pct != null) {
+    const v = Number(updates.cash_reserve_pct)
+    if (!Number.isFinite(v) || v < 0 || v > 90) throw new Error('invalid cash_reserve_pct')
+    set.cash_reserve_pct = v
+  }
+  if (updates.trailing_stop_pct != null) {
+    const v = Number(updates.trailing_stop_pct)
+    if (!Number.isFinite(v) || v < 1 || v > 50) throw new Error('invalid trailing_stop_pct')
+    set.trailing_stop_pct = v
+  }
+  if (updates.max_stocks != null) {
+    const v = Number(updates.max_stocks)
+    if (!Number.isFinite(v) || v < 1 || v > 100) throw new Error('invalid max_stocks')
+    set.max_stocks = Math.floor(v)
+  }
+  if (updates.max_sector_exposure_pct != null) {
+    const v = Number(updates.max_sector_exposure_pct)
+    if (!Number.isFinite(v) || v < 1 || v > 100) throw new Error('invalid max_sector_exposure_pct')
+    set.max_sector_exposure_pct = v
+  }
   if (updates.signal_frequency != null) {
     if (!VALID_FREQUENCY.has(updates.signal_frequency)) throw new Error('invalid signal_frequency')
     set.signal_frequency = updates.signal_frequency
@@ -103,6 +149,10 @@ export async function updatePreferences(userId, updates = {}) {
   if (updates.notify_scans != null) set.notify_scans = Boolean(updates.notify_scans)
 
   if (Object.keys(set).length === 1) throw new Error('no valid fields to update')
-  const res = await col.findOneAndUpdate({ userId }, { $set: set }, { returnDocument: 'after', upsert: true })
-  return res.value || res
+  const update = { $set: set }
+  if (unsetLegacySector) update.$unset = { preferred_sector: '' }
+  const res = await col.findOneAndUpdate({ userId }, update, { returnDocument: 'after', upsert: true, includeResultMetadata: false })
+  const doc = res || (await col.findOne({ userId }))
+  const { sectors } = migrateSectorFields(doc)
+  return { ...DEFAULT_PREFERENCES, ...doc, preferred_sectors: sectors }
 }

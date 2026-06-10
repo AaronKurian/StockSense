@@ -11,6 +11,9 @@ const mongoMcp = new MCPToolset({
 export const rootAgent = new LlmAgent({
   name: 'stocksense_agent',
   model: 'gemini-2.5-flash',
+  vertexai: true,
+  project: process.env.GOOGLE_CLOUD_PROJECT || 'stocksense-13',
+  location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
   description: 'StockSense AI - proactive investment reasoning agent.',
   instruction: `You are StockSense, an AI-powered investment operations agent.
 

@@ -6,15 +6,29 @@ export async function createNotification({ userId, type, title, message, ticker 
   if (!col) throw new Error('MongoDB not connected')
   if (!userId || !title) throw new Error('userId and title required')
 
-  const doc = { userId, type: type || 'info', title, message: message || '', ticker: ticker || null, recId: recId || null, read: false, created_at: new Date() }
+  let subtype = type
+  let url = '/actions'
+  if (type === 'auto_executed' || type === 'trade_executed') {
+    const msgLower = (message || '').toLowerCase()
+    if (msgLower.includes('stop-loss') || msgLower.includes('stop loss')) { subtype = 'stop_loss'; url = '/actions' }
+    else if (msgLower.includes('take-profit') || msgLower.includes('take profit')) { subtype = 'take_profit'; url = '/actions' }
+    else if (msgLower.includes('trailing stop') || msgLower.includes('trailing-stop')) { subtype = 'trailing_stop'; url = '/actions' }
+    else if (msgLower.includes('sell') || msgLower.includes('exit')) { subtype = 'sell'; url = '/actions' }
+    else { subtype = 'buy'; url = '/actions' }
+  } else if (type === 'rebalancing') { subtype = 'rebalance'; url = '/actions' }
+  else if (type === 'recommendation') { url = ticker ? `/signals?ticker=${ticker}` : '/signals' }
+  else if (type === 'scan_complete') { url = '/dashboard' }
+
+  const doc = { userId, type: type || 'info', subtype, title, message: message || '', ticker: ticker || null, recId: recId || null, url, read: false, created_at: new Date() }
   const res = await col.insertOne(doc)
 
-  const pushType = { recommendation: 'recommendation', trade_executed: 'execution', auto_executed: 'execution', scan_complete: 'scan_complete', rebalancing: 'rebalancing' }[type] || null
+  let pushResult = null
+  const pushType = { recommendation: 'recommendation', trade_executed: 'execution', auto_executed: 'execution', scan_complete: 'scan_complete', rebalancing: 'rebalancing', test: 'test' }[type] || null
   if (pushType) {
-    sendToUser(userId, { title, body: message || '', url: '/actions', entityId: recId || null, tag: `${type}-${ticker || 'general'}`, type: pushType }).catch(() => {})
+    pushResult = await sendToUser(userId, { title, body: message || '', url, entityId: recId || null, tag: `${subtype}-${ticker || 'general'}`, type: pushType, subtype }).catch(() => ({ sent: 0, failed: 0, error: true }))
   }
 
-  return { ...doc, _id: res.insertedId }
+  return { ...doc, _id: res.insertedId, push: pushResult }
 }
 
 export async function getNotifications(userId, { unreadOnly = false, limit = 50 } = {}) {
