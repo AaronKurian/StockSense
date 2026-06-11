@@ -13,13 +13,18 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Status-Active-success" />
-  <img src="https://img.shields.io/badge/Next.js-15-black" />
-  <img src="https://img.shields.io/badge/Express.js-Backend-green" />
-  <img src="https://img.shields.io/badge/MongoDB-Atlas-brightgreen" />
-  <img src="https://img.shields.io/badge/PWA-Enabled-blue" />
-  <!-- <img src="https://img.shields.io/badge/AI-Agent%20Powered-Gemini-orange" /> -->
+  <img src="https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white" />
+  <img src="https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black" />
+  <img src="https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" />
+  <img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" />
+  <img src="https://img.shields.io/badge/Express-000000?style=for-the-badge&logo=express&logoColor=white" />
+  <img src="https://img.shields.io/badge/MongoDB-47A248?style=for-the-badge&logo=mongodb&logoColor=white" />
+  <img src="https://img.shields.io/badge/PWA-5A0FC8?style=for-the-badge&logo=pwa&logoColor=white" />
+  <img src="https://img.shields.io/badge/Gemini_AI-4285F4?style=for-the-badge&logo=google-gemini&logoColor=white" />
+  <img src="https://img.shields.io/badge/AI_Agent-FF6F00?style=for-the-badge" />
 </p>
+
+
 
 
 
