@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="./frontend/public/og-image.png" alt="StockSense Banner" width="100%" />
-</p>
-
 <h1 align="center">StockSense AI</h1>
 
 <p align="center">
@@ -13,12 +9,16 @@
 </p>
 
 <p align="center">
+  <img src="./frontend/public/og-image.png" alt="StockSense Banner" width="100%" />
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Status-Active-success" />
   <img src="https://img.shields.io/badge/Next.js-15-black" />
   <img src="https://img.shields.io/badge/Express.js-Backend-green" />
   <img src="https://img.shields.io/badge/MongoDB-Atlas-brightgreen" />
   <img src="https://img.shields.io/badge/PWA-Enabled-blue" />
-  <img src="https://img.shields.io/badge/AI-Agent%20Powered-Gemini-orange" />
+  <!-- <img src="https://img.shields.io/badge/AI-Agent%20Powered-Gemini-orange" /> -->
 </p>
 
 
@@ -392,19 +392,6 @@ All investment decisions remain the responsibility of the user.
 Past performance does not guarantee future results.
 
 Investing involves risk, including potential loss of capital.
-
----
-
-# Roadmap
-
-- [ ] Advanced portfolio analytics
-- [ ] Portfolio benchmarking
-- [ ] Multi-market support
-- [ ] Enhanced risk scoring
-- [ ] Institutional dashboards
-- [ ] Custom agent workflows
-- [ ] Broker integrations
-- [ ] Mobile applications
 
 ---
 
