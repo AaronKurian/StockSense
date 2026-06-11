@@ -1,25 +1,52 @@
 import { getCollection } from '../config/db.js'
-import { fetchTimeSeries, fetchQuote } from './twelvedata.js'
-import { getLatestPricesBatch, upsertLatestPrice } from './prices.js'
-import { createNotification } from './notifications.js'
+import { fetchTimeSeries } from './twelvedata.js'
+import { getLatestPricesBatch, refreshQuotesBatch } from './prices.js'
+import { getOrFetchCached, CACHE_TTL_MS } from './marketCache.js'
+import { logApiUsage } from '../lib/apiUsage.js'
+import { createNotification, formatRecommendationMessage } from './notifications.js'
+import { getPreferences } from './preferences.js'
 import { subscribeToTickers } from './websocket.js'
 import { info as logInfo, warn as logWarn } from '../lib/logger.js'
-import { migrateSectorFields, parseAndValidateSectors, applySectorPreferenceBonus, mergePreferredSectors } from '../lib/sectors.js'
-import { getPreferences } from './preferences.js'
-import { getTickerMetadata } from './metadata.js'
+import { migrateSectorFields, parseAndValidateSectors, applySectorPreferenceBonus, mergePreferredSectors, resolveSector } from '../lib/sectors.js'
+import { getTickerMetadata, getMetadataBatch } from './metadata.js'
+import { markToMarket } from './trades.js'
 
 const VALID_SIGNALS = new Set(['BUY', 'HOLD', 'EXIT', 'WATCH', 'REBALANCE'])
 const VALID_USER_ACTIONS = new Set(['confirmed', 'ignored', 'snoozed'])
 
 const VERTEX_PROJECT = process.env.GOOGLE_CLOUD_PROJECT || 'stocksense-13'
-const VERTEX_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'
-const VERTEX_MODEL = 'gemini-2.5-flash'
-const VERTEX_ENDPOINT = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/${VERTEX_MODEL}:generateContent`
+const VERTEX_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'global'
+const VERTEX_MODEL = process.env.VERTEX_MODEL || 'gemini-3.5-flash'
+const VERTEX_HOST = VERTEX_LOCATION === 'global'
+  ? 'https://aiplatform.googleapis.com'
+  : `https://${VERTEX_LOCATION}-aiplatform.googleapis.com`
+const VERTEX_ENDPOINT = `${VERTEX_HOST}/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/${VERTEX_MODEL}:generateContent`
 
 const TICKER_DELAY_MS = Number(process.env.AGENT_TICKER_DELAY_MS ?? 2000)
 const GEMINI_MAX_RETRIES = Number(process.env.AGENT_GEMINI_MAX_RETRIES ?? 3)
 const GEMINI_RETRY_BASE_MS = Number(process.env.AGENT_GEMINI_RETRY_BASE_MS ?? 5000)
 const SIGNAL_CACHE_MINUTES = Number(process.env.AGENT_SIGNAL_CACHE_MINUTES ?? 30)
+
+const SCAN_INTERVAL_MS = {
+  active: 5 * 60 * 1000,
+  watch: 30 * 60 * 1000,
+  holding: 60 * 60 * 1000,
+  passive: 4 * 60 * 60 * 1000,
+}
+
+function shouldScanTicker(ticker, lastRec, ownedTickers) {
+  if (!lastRec?.created_at) return true
+  const age = Date.now() - new Date(lastRec.created_at).getTime()
+  let interval = SCAN_INTERVAL_MS.passive
+  if ((lastRec.signal === 'BUY' || lastRec.signal === 'EXIT') && lastRec.status === 'generated') interval = SCAN_INTERVAL_MS.active
+  else if (lastRec.signal === 'WATCH') interval = SCAN_INTERVAL_MS.watch
+  else if (ownedTickers.has(ticker)) interval = SCAN_INTERVAL_MS.holding
+  if (SIGNAL_CACHE_MINUTES > 0) {
+    const floor = SIGNAL_CACHE_MINUTES * 60 * 1000
+    interval = Math.max(interval, floor)
+  }
+  return age >= interval
+}
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
@@ -190,17 +217,27 @@ export async function deleteWatchlist({ userId, watchlistId }) {
   return { deletedCount: result.deletedCount, itemsDeletedCount: itemsResult.deletedCount }
 }
 
-export async function addWatchlistItem({ watchlistId, ticker, sector = null }) {
+export async function addWatchlistItem({ watchlistId, ticker, sector = null, name = null }) {
   const col = getCollection('watchlist_items')
   if (!col) throw new Error('MongoDB not connected')
   if (!watchlistId) throw new Error('watchlistId is required')
   const resolvedId = await resolveObjectId(watchlistId)
   const t = normalizeTicker(ticker)
-  const doc = { watchlistId: resolvedId, ticker: t, sector: sector ? String(sector).trim() || null : null }
+  const doc = {
+    watchlistId: resolvedId, ticker: t,
+    sector: sector ? String(sector).trim() || null : null,
+    name: name ? String(name).trim() || null : null,
+  }
   const res = await col.updateOne({ watchlistId: resolvedId, ticker: t }, { $set: doc }, { upsert: true })
 
   try { subscribeToTickers([t]) } catch {}
   return { ...doc, upsertedId: res.upsertedId || null }
+}
+
+export async function getOrCreatePrimaryWatchlist(userId) {
+  const lists = await getWatchlists(userId)
+  if (lists.length) return lists[0]
+  return createWatchlist({ userId, name: 'My Watchlist' })
 }
 
 export async function removeWatchlistItem({ watchlistId, ticker }) {
@@ -214,28 +251,20 @@ export async function removeWatchlistItem({ watchlistId, ticker }) {
 export async function get_portfolio(userId) {
   const col = getCollection('portfolio_positions')
   if (!col) return null
-  return col.find({ userId }).sort({ ticker: 1 }).toArray()
+  const positions = await col.find({ userId }).sort({ ticker: 1 }).toArray()
+  if (!positions.length) return []
+  const metaMap = await getMetadataBatch(positions.map(p => p.ticker))
+  return positions.map(p => ({
+    ...p,
+    sector: resolveSector(p.ticker, metaMap.get(p.ticker)?.sector, p.sector),
+  }))
 }
 
 export async function get_latest_price(ticker) {
-  const col = getCollection('latest_prices')
-  if (!col) return null
-  const t = normalizeTicker(ticker)
-  const cached = await col.findOne({ ticker: t })
-  if (cached?.price != null) return cached
-
-  try {
-    logWarn('prices', `WebSocket price missing for ${t}, using REST fallback`)
-    const quote = await fetchQuote(t)
-    if (quote?.price) {
-      const doc = await upsertLatestPrice(t, { price: quote.price, volume: quote.volume, change_percent: quote.change_percent })
-      logInfo('prices', `Fetched fallback quote for ${t}: $${quote.price}`)
-      return doc
-    }
-  } catch (err) {
-    logWarn('prices', `REST fallback failed for ${t}: ${err.message}`)
-  }
-  return cached || null
+  const { resolveLatestPrice } = await import('./prices.js')
+  const result = await resolveLatestPrice(ticker)
+  if (result.ok) return result.doc
+  return null
 }
 
 export async function addPosition({ userId, ticker, quantity, average_price, sector = null }) {
@@ -290,29 +319,46 @@ export async function calculatePortfolioValue(userId) {
 }
 
 export async function calculateSectorAllocation(userId) {
-  const positions = await get_portfolio(userId) || []
-  const tickers = positions.map(p => p.ticker)
-  const priceMap = await getLatestPricesBatch(tickers)
-  let total = 0
+  const marked = await markToMarket(userId)
+  if (marked.totalEquity <= 0) return []
+  const metaMap = marked.positions.length ? await getMetadataBatch(marked.positions.map(p => p.ticker)) : new Map()
   const bySector = new Map()
-
-  for (const position of positions) {
-    const latest = priceMap.get(position.ticker)
-    const price = latest && Number.isFinite(Number(latest.price)) ? Number(latest.price) : null
-    const current_value = price != null ? Number((price * Number(position.quantity)).toFixed(6)) : null
-    const sector = position.sector || latest?.sector || null
-    if (sector && current_value != null) {
-      bySector.set(sector, (bySector.get(sector) || 0) + current_value)
-      total += current_value
-    }
+  if (marked.cash > 0) bySector.set('Cash', marked.cash)
+  for (const p of marked.positions) {
+    const meta = metaMap.get(p.ticker)
+    const sector = resolveSector(p.ticker, meta?.sector, p.sector)
+    bySector.set(sector, (bySector.get(sector) || 0) + p.value)
   }
-
   const allocation = []
   for (const [sector, value] of bySector.entries()) {
-    allocation.push({ sector, value: Number(value.toFixed(6)), weight: total > 0 ? Number((value / total).toFixed(6)) : 0 })
+    allocation.push({
+      sector,
+      value: Number(value.toFixed(2)),
+      weight: Number((value / marked.totalEquity).toFixed(4)),
+    })
   }
   allocation.sort((a, b) => b.value - a.value)
   return allocation
+}
+
+const MONITORING_SIGNALS = new Set(['HOLD', 'WATCH'])
+const MONITORING_CONF_DELTA = 0.05
+
+async function notifyRecommendation(userId, { signal, ticker, confidence, recId }) {
+  if (signal === 'HOLD' || signal === 'WATCH') return
+  try {
+    const prefs = await getPreferences(userId)
+    const mode = prefs?.mode === 'agentic' ? 'agentic' : 'manual'
+    if (mode === 'agentic' && (signal === 'BUY' || signal === 'EXIT')) return
+    await createNotification({
+      userId,
+      type: 'recommendation',
+      title: `${signal} ${ticker}`,
+      message: formatRecommendationMessage({ confidence, mode }),
+      ticker,
+      recId,
+    })
+  } catch {}
 }
 
 export async function saveRecommendation({ userId, ticker, signal, confidence = null, rationale = '', supporting_factors = [], risks = [], user_action = null }) {
@@ -326,32 +372,103 @@ export async function saveRecommendation({ userId, ticker, signal, confidence = 
   const t = String(ticker).toUpperCase()
   let numericConf = confidence != null ? Number(confidence) : null
   if (numericConf != null && !Number.isFinite(numericConf)) throw new Error('invalid confidence')
-
   if (numericConf != null && numericConf > 1) numericConf = numericConf / 100
 
+  const factors = Array.isArray(supporting_factors) ? supporting_factors : []
+  const riskList = Array.isArray(risks) ? risks : []
+
+  if (MONITORING_SIGNALS.has(signal)) {
+    const existing = await col.findOne(
+      { userId, ticker: t, status: 'generated', signal: { $in: [...MONITORING_SIGNALS] } },
+      { sort: { created_at: -1 } }
+    )
+    if (existing) {
+      const confDelta = numericConf != null && existing.confidence != null
+        ? Math.abs(numericConf - existing.confidence)
+        : 0
+      const signalChanged = existing.signal !== signal
+      const meaningfulChange = signalChanged || confDelta >= MONITORING_CONF_DELTA
+
+      if (!meaningfulChange) {
+        await col.updateOne(
+          { _id: existing._id },
+          { $set: {
+            rationale: rationale || existing.rationale,
+            confidence: numericConf ?? existing.confidence,
+            supporting_factors: factors,
+            risks: riskList,
+            checked_at: new Date(),
+          }}
+        )
+        return { ...existing, _silent: true }
+      }
+
+      const prev_confidence = existing.confidence ?? null
+      const confidence_delta = numericConf != null && prev_confidence != null
+        ? Number((numericConf - prev_confidence).toFixed(3))
+        : null
+
+      const res = await col.findOneAndUpdate(
+        { _id: existing._id },
+        { $set: {
+          signal,
+          confidence: numericConf,
+          prev_confidence,
+          confidence_delta,
+          rationale: rationale || '',
+          supporting_factors: factors,
+          risks: riskList,
+          updated_at: new Date(),
+          checked_at: new Date(),
+          monitoring_anchor: true,
+        }},
+        { returnDocument: 'after' }
+      )
+      const updated = res?.value ?? res ?? existing
+      if (signalChanged) {
+        await notifyRecommendation(userId, { signal, ticker: t, confidence: numericConf, recId: updated._id?.toString() })
+      }
+      return updated
+    }
+  }
+
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
-  const existing = await col.findOne({ userId, ticker: t, signal, status: 'generated', created_at: { $gte: twentyFourHoursAgo } })
-  if (existing) return existing
+  const recentAction = await col.findOne(
+    { userId, ticker: t, status: 'generated', signal: { $nin: [...MONITORING_SIGNALS] }, created_at: { $gte: twentyFourHoursAgo } },
+    { sort: { created_at: -1 } }
+  )
+  if (recentAction && recentAction.signal === signal) return recentAction
 
   const prevRec = await col.find({ userId, ticker: t }).sort({ created_at: -1 }).limit(1).next()
   const prev_confidence = prevRec?.confidence ?? null
-  const confidence_delta = (numericConf != null && prev_confidence != null) ? Number((numericConf - prev_confidence).toFixed(3)) : null
+  const confidence_delta = numericConf != null && prev_confidence != null
+    ? Number((numericConf - prev_confidence).toFixed(3))
+    : null
 
   const doc = {
     userId, ticker: t, signal,
     confidence: numericConf, prev_confidence, confidence_delta,
     rationale: rationale || '',
-    supporting_factors: Array.isArray(supporting_factors) ? supporting_factors : [],
-    risks: Array.isArray(risks) ? risks : [],
+    supporting_factors: factors,
+    risks: riskList,
     status: 'generated',
     created_at: new Date(), user_action: user_action || null,
-    approved_at: null, rejected_at: null, executed_at: null, expired_at: null
+    approved_at: null, rejected_at: null, executed_at: null, expired_at: null, execution_mode: null,
+    blocked_at: null, block_reason: null,
+    monitoring_anchor: MONITORING_SIGNALS.has(signal),
+    checked_at: new Date(),
   }
   const res = await col.insertOne(doc)
   const saved = { ...doc, _id: res.insertedId }
-  try {
-    await createNotification({ userId, type: 'recommendation', title: `${signal} ${t}`, message: rationale?.slice(0, 120) || '', ticker: t, recId: res.insertedId.toString() })
-  } catch {}
+
+  const dupes = await col.find({ userId, ticker: t, status: 'generated' }).sort({ created_at: -1 }).toArray()
+  if (dupes.length > 1) {
+    const [keep, ...rest] = dupes
+    if (rest.length) await col.deleteMany({ _id: { $in: rest.map(d => d._id) } })
+    if (keep._id.toString() !== saved._id.toString()) return keep
+  }
+
+  await notifyRecommendation(userId, { signal, ticker: t, confidence: numericConf, recId: res.insertedId.toString() })
   return saved
 }
 
@@ -369,7 +486,7 @@ export async function expireStaleRecommendations() {
   return result.modifiedCount
 }
 
-const VALID_REC_STATUSES = new Set(['generated', 'approved', 'rejected', 'executed', 'expired'])
+const VALID_REC_STATUSES = new Set(['generated', 'approved', 'rejected', 'executed', 'expired', 'blocked'])
 
 export async function approveRecommendation(recId) {
   const col = getCollection('recommendation_log')
@@ -397,17 +514,41 @@ export async function rejectRecommendation(recId) {
   return res.value || res
 }
 
-export async function executeRecommendation(recId) {
+export async function blockRecommendation(recId, reason) {
   const col = getCollection('recommendation_log')
   if (!col) throw new Error('MongoDB not connected')
   const { ObjectId } = await import('mongodb')
-  let q
-  try { q = { _id: new ObjectId(recId) } } catch { q = { _id: recId } }
-  const rec = await col.findOne(q)
+  let oid
+  try { oid = new ObjectId(recId) } catch { oid = recId }
+  const res = await col.findOneAndUpdate(
+    { _id: oid, status: 'generated' },
+    { $set: { status: 'blocked', block_reason: reason, blocked_at: new Date() } },
+    { returnDocument: 'after' }
+  )
+  const updated = res?.value ?? res
+  if (updated?.status === 'blocked') return updated
+  const rec = await col.findOne({ _id: oid })
   if (!rec) throw new Error('Recommendation not found')
-  if (rec.status !== 'approved' && rec.status !== 'generated') throw new Error(`Cannot execute: status is ${rec.status}`)
-  const res = await col.findOneAndUpdate(q, { $set: { status: 'executed', executed_at: new Date() } }, { returnDocument: 'after' })
-  return res.value || res
+  return rec
+}
+
+export async function executeRecommendation(recId, { execution_mode = 'manual' } = {}) {
+  const col = getCollection('recommendation_log')
+  if (!col) throw new Error('MongoDB not connected')
+  const { ObjectId } = await import('mongodb')
+  let oid
+  try { oid = new ObjectId(recId) } catch { oid = recId }
+  const res = await col.findOneAndUpdate(
+    { _id: oid, status: { $in: ['generated', 'approved'] } },
+    { $set: { status: 'executed', executed_at: new Date(), execution_mode } },
+    { returnDocument: 'after' }
+  )
+  const updated = res?.value ?? res
+  if (updated?.status === 'executed') return updated
+  const rec = await col.findOne({ _id: oid })
+  if (!rec) throw new Error('Recommendation not found')
+  if (rec.status === 'executed') return { ...rec, _alreadyExecuted: true }
+  throw new Error(`Cannot execute: status is ${rec.status}`)
 }
 
 export async function getRecommendationsByStatus(userId, status, limit = 50) {
@@ -419,14 +560,41 @@ export async function getRecommendationsByStatus(userId, status, limit = 50) {
   return col.find(q).sort({ created_at: -1 }).limit(Number(limit)).toArray()
 }
 
-export async function getRecommendationsForUser(userId, { limit = 50, since = null, signal = null } = {}) {
+export async function getRecommendationsForUser(userId, { limit = 50, since = null, signal = null, status = null } = {}) {
   const col = getCollection('recommendation_log')
   if (!col) throw new Error('MongoDB not connected')
   if (!userId) throw new Error('userId is required')
   const q = { userId }
   if (since) q.created_at = { $gte: new Date(since) }
   if (signal) q.signal = signal
+  if (status === 'generated') q.status = 'generated'
+  else if (status === 'completed') q.status = { $in: ['executed', 'approved', 'rejected', 'expired', 'blocked'] }
+  else if (status && VALID_REC_STATUSES.has(status)) q.status = status
   return col.find(q).sort({ created_at: -1 }).limit(Number(limit)).toArray()
+}
+
+export async function getRecommendationHistory(userId, { limit = 100 } = {}) {
+  const col = getCollection('recommendation_log')
+  if (!col) throw new Error('MongoDB not connected')
+  if (!userId) throw new Error('userId is required')
+
+  const rows = await col.find({ userId }).sort({ created_at: -1 }).limit(Number(limit) * 4).toArray()
+  const seenMonitoring = new Set()
+  const result = []
+
+  for (const rec of rows) {
+    const isMonitoring = rec.status === 'generated' && MONITORING_SIGNALS.has(rec.signal)
+    if (isMonitoring) {
+      if (seenMonitoring.has(rec.ticker)) continue
+      seenMonitoring.add(rec.ticker)
+      result.push(rec)
+      continue
+    }
+    if (rec.status === 'generated' && !['BUY', 'EXIT', 'REBALANCE'].includes(rec.signal)) continue
+    result.push(rec)
+    if (result.length >= Number(limit)) break
+  }
+  return result
 }
 
 export async function getLatestRecommendationForTicker(userId, ticker) {
@@ -459,13 +627,27 @@ export async function recordFeedback(recId, user_action) {
   return res.value
 }
 
-export async function get_price_context(ticker) {
-  if (!ticker) throw new Error('ticker required')
+async function computePriceContext(ticker) {
+  const t = String(ticker).trim().toUpperCase()
   let ts
   try {
-    ts = await fetchTimeSeries(ticker, '1day', 250)
+    ts = await fetchTimeSeries(t, '1day', 60, { source: 'price_context' })
   } catch (err) {
-
+    const { resolveLatestPrice } = await import('./prices.js')
+    const priceResult = await resolveLatestPrice(t, { source: 'price_context_fallback' })
+    if (priceResult.ok) {
+      return {
+        current_price: priceResult.price,
+        seven_day_change_pct: null,
+        thirty_day_change_pct: null,
+        trend: 'neutral',
+        above_50dma: null,
+        above_200dma: null,
+        volume_spike: false,
+        price_source: priceResult.source,
+        partial: true,
+      }
+    }
     return null
   }
   if (!ts?.values?.length) return null
@@ -503,13 +685,21 @@ export async function get_price_context(ticker) {
     seven_day_change_pct: seven_day_change_pct != null ? Number(seven_day_change_pct.toFixed(3)) : null,
     thirty_day_change_pct: thirty_day_change_pct != null ? Number(thirty_day_change_pct.toFixed(3)) : null,
     trend, above_50dma: dma50 != null ? latest.close > dma50 : null,
-    above_200dma: dma200 != null ? latest.close > dma200 : null, volume_spike
+    above_200dma: dma200 != null ? latest.close > dma200 : null,
+    volume_spike,
   }
 }
 
-export async function get_market_news(ticker) {
+export async function get_price_context(ticker) {
   if (!ticker) throw new Error('ticker required')
   const t = String(ticker).trim().toUpperCase()
+  const { data } = await getOrFetchCached('price_context_cache', t, CACHE_TTL_MS.price_context, () => computePriceContext(t))
+  return data
+}
+
+async function fetchMarketNewsRaw(ticker) {
+  const t = String(ticker).trim().toUpperCase()
+  logApiUsage({ provider: 'yahoo', endpoint: 'rss', ticker: t, source: 'market_news' })
   const url = `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(t)}&region=US&lang=en-US`
   let xml
   try {
@@ -524,6 +714,13 @@ export async function get_market_news(ticker) {
     const pub = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1]?.trim() || null
     return title ? { headline: title, published_at: pub } : null
   }).filter(Boolean)
+}
+
+export async function get_market_news(ticker) {
+  if (!ticker) throw new Error('ticker required')
+  const t = String(ticker).trim().toUpperCase()
+  const { data } = await getOrFetchCached('market_news_cache', t, CACHE_TTL_MS.market_news, () => fetchMarketNewsRaw(t))
+  return data || []
 }
 
 function validateGeminiOutput(output) {
@@ -551,11 +748,57 @@ async function getAccessToken() {
   return token
 }
 
-async function callGeminiOnce({ user_profile, portfolio, watchlist, latest_price, price_context, market_news } = {}) {
+export async function buildPortfolioDecisionContext(userId, ticker, prefs = null) {
+  const marked = await markToMarket(userId)
+  const sectors = await calculateSectorAllocation(userId)
+  const p = prefs || await getPreferences(userId)
+  const maxStocks = p?.max_stocks ?? 15
+  const cashReservePct = p?.cash_reserve_pct ?? 10
+  const maxPosPct = p?.max_position_size_pct ?? 20
+  const owned = marked.positions.find(pos => pos.ticker === String(ticker).toUpperCase())
+
+  return {
+    total_equity: marked.totalEquity,
+    virtual_cash: marked.cash,
+    position_count: marked.positions.length,
+    max_positions: maxStocks,
+    positions_capacity: `${marked.positions.length}/${maxStocks}`,
+    min_cash_reserve_pct: cashReservePct,
+    max_single_position_pct: maxPosPct,
+    owned_tickers: marked.positions.map(pos => ({
+      ticker: pos.ticker,
+      value: pos.value,
+      sector: pos.sector,
+      quantity: Number(pos.quantity),
+    })),
+    sector_allocation_pct: sectors.map(s => ({
+      sector: s.sector,
+      weight_pct: Math.round(s.weight * 1000) / 10,
+    })),
+    already_owns_ticker: !!owned,
+    ticker_position: owned ? {
+      quantity: Number(owned.quantity),
+      value: owned.value,
+      avg_price: Number(owned.average_price),
+      mark: owned.mark,
+    } : null,
+    rationale_requirements: owned ? [
+      'This is an OWNED position. For HOLD: explain portfolio management status - within allocation limits, no stop-loss/take-profit triggered, position size acceptable.',
+      'Do NOT describe generic market movements or price trends for routine HOLD on holdings.',
+      'Keep rationale to 1-2 sentences focused on why no action is needed.',
+    ] : [
+      'Mention portfolio context only when it materially changes the decision (e.g. near position limit, sector overweight, low cash).',
+      'For BUY/EXIT/REBALANCE/WATCH on non-held tickers, include specific portfolio factors that drove the decision.',
+      'Avoid generic market commentary or repetitive exposure percentages.',
+    ],
+  }
+}
+
+async function callGeminiOnce({ user_profile, portfolio, watchlist, latest_price, price_context, market_news, portfolio_context } = {}) {
   const accessToken = await getAccessToken()
 
-  const systemInstruction = 'You are StockSense, an investment reasoning engine. Return only strict JSON matching the schema. Do not include markdown, code fences, extra keys, or commentary. Use the supplied portfolio, watchlist, latest_price, price_context, and market_news to make one concise decision.'
-  const context = JSON.stringify({ user_profile, portfolio, watchlist, latest_price, price_context, market_news } ?? null, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2)
+  const systemInstruction = 'You are StockSense, an investment operations agent. Return only strict JSON matching the schema. Do not include markdown, code fences, extra keys or commentary. Use portfolio_context plus market data. Mention portfolio impact (positions, cash, sectors, capacity) only when it materially affects the decision - avoid repeating exposure percentages on every recommendation.'
+  const context = JSON.stringify({ user_profile, portfolio, portfolio_context, watchlist, latest_price, price_context, market_news } ?? null, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2)
 
   const response = await fetch(VERTEX_ENDPOINT, {
     method: 'POST',
@@ -603,16 +846,16 @@ export async function callGemini(input = {}) {
       lastErr = err
       if (!isRateLimitError(err) || attempt === GEMINI_MAX_RETRIES) throw err
       const waitMs = GEMINI_RETRY_BASE_MS * Math.pow(3, attempt - 1)
-      logWarn('agent', `Gemini rate-limited (attempt ${attempt}/${GEMINI_MAX_RETRIES}) — backing off ${Math.round(waitMs / 1000)}s`)
+      logWarn('agent', `Gemini rate-limited (attempt ${attempt}/${GEMINI_MAX_RETRIES}) - backing off ${Math.round(waitMs / 1000)}s`)
       await sleep(waitMs)
     }
   }
   throw lastErr
 }
 
-export async function generateSignal(ticker, { user_profile, portfolio, watchlist_items, latest_price, price_context, market_news }) {
+export async function generateSignal(ticker, { user_profile, portfolio, watchlist_items, latest_price, price_context, market_news, portfolio_context }) {
   if (!ticker) throw new Error('ticker required')
-  const result = await callGemini({ user_profile, portfolio, watchlist: watchlist_items, latest_price, price_context, market_news })
+  const result = await callGemini({ user_profile, portfolio, watchlist: watchlist_items, latest_price, price_context, market_news, portfolio_context })
   return { ticker: String(ticker).toUpperCase(), ...result }
 }
 
@@ -630,7 +873,7 @@ export async function runAgentForUser(userId) {
 
   const user_profile = await get_user_profile(userId)
   if (!user_profile) {
-    logWarn('agent', `No user profile for ${userId} — user may not exist`)
+    logWarn('agent', `No user profile for ${userId} - user may not exist`)
     return []
   }
   const prefs = await getPreferences(userId)
@@ -642,27 +885,28 @@ export async function runAgentForUser(userId) {
   if (Array.isArray(portfolio)) for (const p of portfolio) if (p.ticker) tickerSet.add(p.ticker)
   if (Array.isArray(watchlistItems)) for (const w of watchlistItems) if (w.ticker) tickerSet.add(w.ticker)
   if (!tickerSet.size) {
-    logWarn('agent', `No tickers for ${userId} — portfolio: ${portfolio?.length || 0}, watchlist: ${watchlistItems?.length || 0}`)
+    logWarn('agent', `No tickers for ${userId} - portfolio: ${portfolio?.length || 0}, watchlist: ${watchlistItems?.length || 0}`)
     return []
   }
 
   const allTickers = [...tickerSet]
-
-  const cacheCutoff = new Date(Date.now() - SIGNAL_CACHE_MINUTES * 60 * 1000)
-  const recentRecs = SIGNAL_CACHE_MINUTES > 0 ? await getLatestRecommendationsForTickers(userId, allTickers) : new Map()
+  const ownedTickers = new Set((portfolio || []).map(p => p.ticker).filter(Boolean))
+  const recentRecs = await getLatestRecommendationsForTickers(userId, allTickers)
   const results = []
   const tickers = []
   for (const ticker of allTickers) {
     const recent = recentRecs.get(ticker)
-    if (recent && recent.created_at && new Date(recent.created_at) >= cacheCutoff) {
-      results.push({ ticker, cached: true })
+    if (recent && !shouldScanTicker(ticker, recent, ownedTickers)) {
+      results.push({ ticker, cached: true, reason: 'adaptive_scan' })
       continue
     }
     tickers.push(ticker)
   }
   const cachedCount = allTickers.length - tickers.length
-  logInfo('agent', `Scanning ${tickers.length} ticker(s) for ${userId}${cachedCount ? ` (${cachedCount} cached/skipped)` : ''}: ${tickers.join(', ') || '—'}`)
+  logInfo('agent', `Scanning ${tickers.length} ticker(s) for ${userId}${cachedCount ? ` (${cachedCount} skipped by adaptive scan)` : ''}: ${tickers.join(', ') || '-'}`)
   if (!tickers.length) return results
+
+  await refreshQuotesBatch(tickers, { source: 'scan' })
 
   const contextResults = await Promise.allSettled(tickers.map(async (ticker) => {
     const [latest_price, price_context, market_news] = await Promise.allSettled([
@@ -684,7 +928,8 @@ export async function runAgentForUser(userId) {
 
     let recommendation
     try {
-      recommendation = await generateSignal(ticker, { user_profile, portfolio, watchlist_items: watchlistItems, latest_price, price_context, market_news })
+      const portfolio_context = await buildPortfolioDecisionContext(userId, ticker, prefs)
+      recommendation = await generateSignal(ticker, { user_profile, portfolio, watchlist_items: watchlistItems, latest_price, price_context, market_news, portfolio_context })
       if (recommendation.confidence != null && preferredSectors.length) {
         const meta = await getTickerMetadata(ticker)
         recommendation.confidence = applySectorPreferenceBonus(

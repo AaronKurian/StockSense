@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import { Brain, Eye, EyeOff } from "lucide-react"
+import Image from "next/image"
+import { Eye, EyeOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -38,9 +39,7 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm rounded-2xl border-white/10 bg-white/[0.03]">
         <CardContent className="space-y-6 p-6">
           <div className="flex flex-col items-center gap-2">
-            <div className="flex size-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/30 to-blue-500/30 ring-1 ring-white/10">
-              <Brain className="size-6 text-emerald-300" />
-            </div>
+            <Image src="/favicon.png" alt="StockSense" width={48} height={48} className="w-12 h-12" priority />
             <h1 className="text-xl font-semibold">Sign in to StockSense</h1>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">

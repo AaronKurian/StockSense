@@ -62,7 +62,7 @@ export function LearningDashboard() {
                 />
               </div>
               <span className="text-xs font-mono w-12 text-right">
-                {c.accuracy != null ? `${c.accuracy}%` : '—'}
+                {c.accuracy != null ? `${c.accuracy}%` : '-'}
               </span>
               <span className="text-[10px] text-muted-foreground w-16 text-right">
                 ({c.total} signals)

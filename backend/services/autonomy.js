@@ -1,8 +1,9 @@
 
 import { getCollection } from '../config/db.js'
-import { get_latest_price, saveRecommendation, executeRecommendation, getRecommendationsByStatus } from './agent.js'
+import { get_latest_price, saveRecommendation, executeRecommendation, blockRecommendation, getRecommendationsByStatus } from './agent.js'
+import { refreshQuotesBatch, isExecutionPriceStale } from './prices.js'
 import { createVirtualTrade, validateExecution, calculatePositionSize, getVirtualCash, markToMarket } from './trades.js'
-import { createNotification } from './notifications.js'
+import { createNotification, formatTradeTitle, formatTradeMessage, formatRebalanceMessage, formatBlockMessage } from './notifications.js'
 import { info, warn } from '../lib/logger.js'
 
 const LOCK_TIMEOUT_MS = 15 * 60 * 1000
@@ -92,9 +93,17 @@ export async function runAutonomousExecution(userId, prefs) {
       const savedRec = await saveRecommendation({ userId, ticker: pos.ticker, signal: 'EXIT', confidence: 0.9, rationale: exitReason, supporting_factors: [exitReason], risks: ['Market may reverse'] })
       const recId = savedRec?._id?.toString()
       if (recId) {
-        const execd = await executeRecommendation(recId)
+        const execd = await executeRecommendation(recId, { execution_mode: 'automatic' })
+        if (execd._alreadyExecuted) continue
         await createVirtualTrade({ userId, ticker: pos.ticker, action: 'SELL', quantity: sellQuantity, entry_price: currentPrice, signal_id: recId, rationale: exitReason })
-        await createNotification({ userId, type: 'auto_executed', title: `Auto Sell: ${pos.ticker} (${sellQuantity} shares @ $${currentPrice.toFixed(2)})`, message: exitReason, ticker: pos.ticker, recId })
+        await createNotification({
+          userId,
+          type: 'auto_executed',
+          title: formatTradeTitle('SELL', pos.ticker),
+          message: formatTradeMessage({ quantity: sellQuantity, price: currentPrice, mode: 'automatic' }),
+          ticker: pos.ticker,
+          recId,
+        })
         executed.push(execd)
         exits++
         info('autonomy', 'Auto exit', { userId, ticker: pos.ticker, reason: exitReason, pnlPct: pnlPct.toFixed(1), drawdownPct: drawdownPct.toFixed(1) })
@@ -104,17 +113,94 @@ export async function runAutonomousExecution(userId, prefs) {
     }
   }
 
+  const maxSectorPct = prefs?.max_sector_exposure_pct ?? 40
+  const marked = await markToMarket(userId)
+  const hasUnknownSector = marked.positions.some(p => !p.sector || p.sector === 'Unknown')
+  if (!hasUnknownSector && marked.positions.length >= 1 && marked.totalEquity > 0) {
+    const sectorWeights = {}
+    for (const p of marked.positions) {
+      const sector = p.sector
+      sectorWeights[sector] = (sectorWeights[sector] || 0) + (p.value / marked.totalEquity * 100)
+    }
+    for (const [sector, weight] of Object.entries(sectorWeights)) {
+      if (weight > maxSectorPct) {
+        const largest = marked.positions
+          .filter(p => p.sector === sector)
+          .sort((a, b) => b.value - a.value)[0]
+        if (!largest) continue
+        const existingTrim = await getCollection('recommendation_log')?.findOne({
+          userId, ticker: largest.ticker, signal: 'EXIT', status: 'generated',
+          created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        })
+        if (existingTrim) continue
+        const reason = `Rebalancing: ${sector} sector at ${weight.toFixed(0)}% (target <${maxSectorPct}%). Trimming largest position.`
+        const savedRec = await saveRecommendation({ userId, ticker: largest.ticker, signal: 'EXIT', confidence: 0.75, rationale: reason, supporting_factors: [reason], risks: ['May miss further gains'] })
+        await createNotification({
+          userId,
+          type: 'rebalancing',
+          title: `Rebalance ${sector}`,
+          message: formatRebalanceMessage({ sector, weight, maxPct: maxSectorPct }),
+          ticker: largest.ticker,
+          recId: savedRec?._id?.toString(),
+        })
+        rebalanceSignals++
+        info('autonomy', 'Rebalancing signal generated', { userId, ticker: largest.ticker, sector, weight: weight.toFixed(1) })
+      }
+    }
+  }
+
   const pending = await getRecommendationsByStatus(userId, 'generated', 20)
+  const priceTickers = [
+    ...positions.map(p => p.ticker),
+    ...pending.filter(r => r.signal === 'BUY' || r.signal === 'EXIT').map(r => r.ticker),
+  ]
+  if (priceTickers.length) {
+    await refreshQuotesBatch([...new Set(priceTickers)], { source: 'autonomy' })
+  }
+
   for (const rec of pending) {
     if (rec.signal !== 'BUY' && rec.signal !== 'EXIT') continue
     const action = rec.signal === 'BUY' ? 'BUY' : 'SELL'
     const price_doc = await get_latest_price(rec.ticker)
     const price = price_doc?.price
-    if (!price) continue
+    const stale = price_doc && isExecutionPriceStale(price_doc)
+    if (!price || stale) {
+      const blockReason = !price ? 'price_unavailable' : 'stale_price'
+      await blockRecommendation(rec._id.toString(), blockReason)
+      await createNotification({
+        userId,
+        type: 'blocked',
+        title: `${rec.signal} ${rec.ticker} blocked`,
+        message: formatBlockMessage(blockReason),
+        ticker: rec.ticker,
+        recId: rec._id.toString(),
+      })
+      const { resolveLatestPrice, getPriceAgeMinutes } = await import('./prices.js')
+      const lookup = await resolveLatestPrice(rec.ticker, { source: 'autonomy', forceRefresh: stale })
+      info('autonomy', `Execution blocked - ${blockReason}`, {
+        userId,
+        ticker: rec.ticker,
+        reason: blockReason,
+        source: lookup.source,
+        detail: lookup.reason,
+        priceAgeMinutes: price_doc ? getPriceAgeMinutes(price_doc) : null,
+        rateLimited: lookup.reason === 'api_rate_limited',
+      })
+      continue
+    }
 
     const validation = await validateExecution({ userId, ticker: rec.ticker, action, confidence: rec.confidence, price })
     if (!validation.allowed) {
-      info('autonomy', 'Execution skipped', { userId, ticker: rec.ticker, reason: validation.reason })
+      await blockRecommendation(rec._id.toString(), validation.reason)
+      await createNotification({
+        userId,
+        type: 'blocked',
+        title: `${rec.signal} ${rec.ticker} blocked`,
+        message: formatBlockMessage(validation.reason),
+        ticker: rec.ticker,
+        recId: rec._id.toString(),
+      })
+      info('autonomy', 'Execution blocked', { userId, ticker: rec.ticker, reason: validation.reason })
       continue
     }
 
@@ -130,41 +216,21 @@ export async function runAutonomousExecution(userId, prefs) {
         if (quantity <= 0) continue
       }
 
-      const execd = await executeRecommendation(rec._id.toString())
+      const execd = await executeRecommendation(rec._id.toString(), { execution_mode: 'automatic' })
+      if (execd._alreadyExecuted) continue
       await createVirtualTrade({ userId, ticker: rec.ticker, action, quantity, entry_price: price, signal_id: rec._id.toString(), rationale: rec.rationale })
-      await createNotification({ userId, type: 'auto_executed', title: `Auto ${action === 'BUY' ? 'Buy' : 'Sell'}: ${rec.ticker} (${quantity} shares @ $${price.toFixed(2)})`, message: `Confidence ${Math.round((rec.confidence || 0) * 100)}%. ${rec.rationale?.slice(0, 80) || ''}`, ticker: rec.ticker, recId: rec._id.toString() })
+      await createNotification({
+        userId,
+        type: 'auto_executed',
+        title: formatTradeTitle(action, rec.ticker),
+        message: formatTradeMessage({ quantity, price, mode: 'automatic' }),
+        ticker: rec.ticker,
+        recId: rec._id.toString(),
+      })
       executed.push(execd)
       info('autonomy', 'Auto-executed trade', { userId, ticker: rec.ticker, action, quantity, price })
     } catch (err) {
       warn('autonomy', `Auto-exec failed for ${rec.ticker}: ${err.message}`)
-    }
-  }
-
-  const maxSectorPct = prefs?.max_sector_exposure_pct ?? 40
-  const marked = await markToMarket(userId)
-  if (marked.positions.length >= 1 && marked.totalEquity > 0) {
-    const sectorWeights = {}
-    for (const p of marked.positions) {
-      const sector = p.sector || 'Unknown'
-      sectorWeights[sector] = (sectorWeights[sector] || 0) + (p.value / marked.totalEquity * 100)
-    }
-    for (const [sector, weight] of Object.entries(sectorWeights)) {
-      if (weight > maxSectorPct && sector !== 'Unknown') {
-        const largest = marked.positions
-          .filter(p => (p.sector || 'Unknown') === sector)
-          .sort((a, b) => b.value - a.value)[0]
-        if (!largest) continue
-        const existingTrim = await getCollection('recommendation_log')?.findOne({
-          userId, ticker: largest.ticker, signal: 'EXIT', status: 'generated',
-          created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-        })
-        if (existingTrim) continue
-        const reason = `Rebalancing: ${sector} sector at ${weight.toFixed(0)}% (target <${maxSectorPct}%). Trimming largest position.`
-        await saveRecommendation({ userId, ticker: largest.ticker, signal: 'EXIT', confidence: 0.75, rationale: reason, supporting_factors: [reason], risks: ['May miss further gains'] })
-        await createNotification({ userId, type: 'rebalancing', title: `Rebalance: ${sector} overweight`, message: reason, ticker: largest.ticker })
-        rebalanceSignals++
-        info('autonomy', 'Rebalancing signal generated', { userId, ticker: largest.ticker, sector, weight: weight.toFixed(1) })
-      }
     }
   }
 

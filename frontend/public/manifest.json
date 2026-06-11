@@ -1,10 +1,22 @@
 {
   "name": "StockSense",
   "short_name": "StockSense",
-  "description": "Personal AI stock advisory - proactive signals and explainable intelligence.",
-  "start_url": "/dashboard",
+  "description": "Explainable AI investment intelligence with portfolio-aware signals and human-controlled decisions.",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#020617",
   "theme_color": "#020617",
-  "orientation": "portrait-primary"
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
 }

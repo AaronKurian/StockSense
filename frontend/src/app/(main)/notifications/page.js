@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { motion } from "framer-motion"
 import { Bell, Trash2 } from "lucide-react"
 import { toast } from "sonner"
@@ -19,11 +20,13 @@ const typeColor = {
   auto_executed: "border-purple-500/30 bg-purple-500/10 text-purple-200",
   scan_complete: "border-amber-500/30 bg-amber-500/10 text-amber-200",
   rebalancing: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200",
+  blocked: "border-rose-500/30 bg-rose-500/10 text-rose-200",
   test: "border-white/15 bg-white/5 text-muted-foreground",
 }
 
 export default function NotificationsPage() {
   useEffect(() => { document.title = "Notifications - StockSense" }, [])
+  const router = useRouter()
   const { userId } = useAuth()
   const [notifications, setNotifications] = useState([])
   const [loading, setLoading] = useState(true)
@@ -72,7 +75,7 @@ export default function NotificationsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Notifications</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Agent activity, recommendations, and trade executions.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Agent activity, recommendations and trade executions.</p>
         </div>
         {notifications.length > 0 && (
           <Button variant="outline" size="sm" className="rounded-md border-white/15 text-rose-300 hover:bg-rose-500/10" onClick={handleClearAll}>
@@ -92,18 +95,23 @@ export default function NotificationsPage() {
         <div className="space-y-2">
           {notifications.map(n => (
             <motion.div key={n._id} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -20 }}>
-              <Card className="rounded-md border-white/10 bg-white/[0.03] group">
+              <Card
+                className={`rounded-md border-white/10 bg-white/[0.03] group ${n.url ? "cursor-pointer hover:bg-white/[0.06] transition-colors" : ""}`}
+                onClick={() => n.url && router.push(n.url)}
+              >
                 <CardContent className="flex items-start gap-3 p-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className={`text-[10px] ${typeColor[n.type] || 'border-white/10'}`}>{n.type?.replace('_', ' ')}</Badge>
                       <span className="text-[11px] text-muted-foreground">{formatTimeAgo(n.created_at)}</span>
                     </div>
-                    <p className="text-sm font-medium mt-1">{n.title}</p>
-                    {n.message && <p className="text-xs text-muted-foreground mt-0.5 truncate">{n.message}</p>}
+                    <p className="text-sm font-medium mt-1 break-words">{n.title}</p>
+                    {n.message ? (
+                      <p className="text-xs text-muted-foreground mt-0.5 break-words leading-relaxed whitespace-pre-wrap">{n.message}</p>
+                    ) : null}
                   </div>
                   <button
-                    onClick={() => handleDelete(n._id)}
+                    onClick={(e) => { e.stopPropagation(); handleDelete(n._id) }}
                     className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-opacity hover:bg-rose-500/10 hover:text-rose-300 opacity-100 md:opacity-0 md:group-hover:opacity-100"
                     aria-label="Delete notification"
                   >

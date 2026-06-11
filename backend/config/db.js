@@ -47,6 +47,9 @@ export async function connect(uri, dbName = "stocksense") {
 
     await db.collection('ticker_metadata').createIndex({ ticker: 1 }, { unique: true })
     await db.collection('push_subscriptions').createIndex({ userId: 1, endpoint: 1 }, { unique: true })
+
+    await db.collection('portfolio_equity_history').createIndex({ userId: 1, bucket: 1 }, { unique: true })
+    await db.collection('portfolio_snapshots').createIndex({ userId: 1, date: 1 }, { unique: true })
   } catch (err) {
     console.warn('Index creation skipped or failed:', err.message)
   }

@@ -1,6 +1,7 @@
 import { getCollection } from '../config/db.js'
-import { getLatestPricesBatch } from './prices.js'
+import { getLatestPricesBatch, refreshQuotesBatch } from './prices.js'
 import { getMetadataBatch } from './metadata.js'
+import { resolveSector } from '../lib/sectors.js'
 import { getVirtualCash, getTradeStats } from './trades.js'
 
 export async function getPortfolioIntelligence(userId) {
@@ -16,6 +17,14 @@ async function computeIntelligence(userId) {
   if (!positions.length) {
     return {
       healthScore: 50,
+      healthBreakdown: {
+        score: 50,
+        diversification: 0,
+        concentration: 100,
+        cashReserve: 100,
+        sectorBalance: 100,
+        factors: [{ type: 'info', text: 'No positions - portfolio is 100% cash' }],
+      },
       sectors: [],
       concentration: { hasRisk: false, alerts: [], herfindahlIndex: 0 },
       allocation: { cashWeight: 1, equityWeight: 0, diversificationScore: 0, positionCount: 0 },
@@ -26,6 +35,7 @@ async function computeIntelligence(userId) {
   }
 
   const tickers = positions.map(p => p.ticker)
+  try { await refreshQuotesBatch(tickers, { source: 'intelligence' }) } catch {}
   const [priceMap, metaMap, tradeStats] = await Promise.all([
     getLatestPricesBatch(tickers),
     getMetadataBatch(tickers),
@@ -35,12 +45,16 @@ async function computeIntelligence(userId) {
   let totalEquity = 0
   const positionValues = []
   for (const pos of positions) {
-    const price = priceMap.get(pos.ticker)?.price
-    const value = price ? price * Number(pos.quantity) : Number(pos.average_price) * Number(pos.quantity)
+    const live = priceMap.get(pos.ticker)?.price
+    const price = (live != null && Number.isFinite(Number(live)) && Number(live) > 0)
+      ? Number(live)
+      : Number(pos.average_price)
+    const value = price * Number(pos.quantity)
     totalEquity += value
-    const meta = metaMap.get(pos.ticker) || { sector: 'Unknown' }
+    const meta = metaMap.get(pos.ticker)
+    const sector = resolveSector(pos.ticker, meta?.sector, pos.sector)
     const pnlPct = price ? ((price - Number(pos.average_price)) / Number(pos.average_price)) * 100 : 0
-    positionValues.push({ ticker: pos.ticker, value, sector: meta.sector, pnlPct, quantity: pos.quantity, avgPrice: pos.average_price, currentPrice: price })
+    positionValues.push({ ticker: pos.ticker, value, sector, pnlPct, quantity: pos.quantity, avgPrice: pos.average_price, currentPrice: price })
   }
 
   const totalValue = totalEquity + virtual_cash
@@ -51,15 +65,15 @@ async function computeIntelligence(userId) {
     sectorMap.set(pv.sector, { value: existing.value + pv.value, count: existing.count + 1 })
   }
   const sectors = [...sectorMap.entries()].map(([sector, { value, count }]) => ({
-    sector, value: Number(value.toFixed(2)), weight: Number((value / totalEquity).toFixed(4)), positionCount: count
+    sector, value: Number(value.toFixed(2)), weight: Number((value / totalValue).toFixed(4)), positionCount: count
   })).sort((a, b) => b.value - a.value)
-
-  const concentration = detectConcentrationRisk(positionValues, totalEquity)
 
   const cashWeight = totalValue > 0 ? virtual_cash / totalValue : 1
   const equityWeight = 1 - cashWeight
+  const portfolioMature = isPortfolioMature(positions.length, cashWeight)
+  const concentration = detectConcentrationRisk(positionValues, totalEquity, portfolioMature)
   const diversificationScore = calcDiversificationScore(positions.length, concentration.herfindahlIndex)
-  const allocation = { cashWeight: Number(cashWeight.toFixed(4)), equityWeight: Number(equityWeight.toFixed(4)), diversificationScore, positionCount: positions.length }
+  const allocation = { cashWeight: Number(cashWeight.toFixed(4)), equityWeight: Number(equityWeight.toFixed(4)), diversificationScore, positionCount: positions.length, portfolioMature }
 
   const sorted = [...positionValues].sort((a, b) => b.pnlPct - a.pnlPct)
   const performance = {
@@ -73,15 +87,20 @@ async function computeIntelligence(userId) {
   }
 
   const maxSectorWeight = sectors.length ? sectors[0].weight : 0
-  const warnings = generateWarnings(sectors, positionValues, totalEquity, cashWeight)
-  const insights = generateInsights(positionValues, sectors, cashWeight, performance, totalEquity)
-  const healthScore = calculateHealthScore(allocation, concentration, cashWeight, maxSectorWeight)
+  const warnings = generateWarnings(sectors, positionValues, totalEquity, cashWeight, positions.length, portfolioMature)
+  const insights = generateInsights(positionValues, sectors, cashWeight, performance, portfolioMature)
+  const healthBreakdown = calculateHealthScore(allocation, concentration, cashWeight, maxSectorWeight, portfolioMature)
 
-  return { healthScore, sectors, concentration, allocation, performance, warnings, insights }
+  return { healthScore: healthBreakdown.score, healthBreakdown, sectors, concentration, allocation, performance, warnings, insights }
 }
 
-function detectConcentrationRisk(positions, totalEquity) {
-  if (totalEquity <= 0) return { hasRisk: false, alerts: [], herfindahlIndex: 0 }
+function isPortfolioMature(positionCount, cashWeight) {
+  const investedPct = (1 - cashWeight) * 100
+  return positionCount >= 5 || investedPct >= 75
+}
+
+function detectConcentrationRisk(positions, totalEquity, portfolioMature = true) {
+  if (!portfolioMature || totalEquity <= 0) return { hasRisk: false, alerts: [], herfindahlIndex: 0 }
   const alerts = []
   let hhi = 0
   for (const pos of positions) {
@@ -99,19 +118,61 @@ function calcDiversificationScore(positionCount, hhi) {
   return Math.round(countScore * 0.4 + hhiScore * 0.6)
 }
 
-function calculateHealthScore(allocation, concentration, cashWeight, maxSectorWeight) {
+function calculateHealthScore(allocation, concentration, cashWeight, maxSectorWeight, portfolioMature = true) {
   const divScore = allocation.diversificationScore
   const concScore = Math.round((1 - concentration.herfindahlIndex) * 100)
   let cashScore = 70
-  if (cashWeight >= 0.10 && cashWeight <= 0.30) cashScore = 100
-  else if (cashWeight < 0.05) cashScore = 30
-  else if (cashWeight > 0.50) cashScore = 50
+  const factors = []
+
+  if (!portfolioMature) {
+    factors.push({ type: 'info', text: 'Portfolio still being constructed - full scoring at 5+ positions or 75% invested' })
+    return {
+      score: 70,
+      diversification: divScore,
+      concentration: concScore,
+      cashReserve: cashScore,
+      sectorBalance: 100,
+      factors,
+    }
+  }
+
+  if (cashWeight >= 0.10 && cashWeight <= 0.30) {
+    cashScore = 100
+    factors.push({ type: 'positive', text: 'Cash reserves in target range (10–30%)' })
+  } else if (cashWeight < 0.05) {
+    cashScore = 30
+    factors.push({ type: 'negative', text: 'Cash reserves critically low (<5%)' })
+  } else if (cashWeight > 0.50) {
+    cashScore = 50
+    factors.push({ type: 'negative', text: `High cash position (${Math.round(cashWeight * 100)}%)` })
+  }
+
   const sectorScore = maxSectorWeight > 0.50 ? 30 : maxSectorWeight > 0.35 ? 60 : 100
-  return Math.max(0, Math.min(100, Math.round(divScore * 0.40 + concScore * 0.30 + cashScore * 0.20 + sectorScore * 0.10)))
+  if (maxSectorWeight > 0.50) {
+    factors.push({ type: 'negative', text: `Sector concentration critical (${Math.round(maxSectorWeight * 100)}%)` })
+  } else if (maxSectorWeight > 0.35) {
+    factors.push({ type: 'negative', text: `Sector concentration elevated (${Math.round(maxSectorWeight * 100)}%)` })
+  } else {
+    factors.push({ type: 'positive', text: 'Sector balance healthy' })
+  }
+
+  if (divScore >= 75) factors.push({ type: 'positive', text: `Good diversification (${allocation.positionCount} positions)` })
+  else if (divScore < 50) factors.push({ type: 'negative', text: 'Low diversification score' })
+
+  if (concScore >= 80 && !concentration.hasRisk) factors.push({ type: 'positive', text: 'Low position concentration' })
+  else if (concentration.hasRisk) factors.push({ type: 'negative', text: 'Position concentration risk detected' })
+
+  const score = Math.max(0, Math.min(100, Math.round(divScore * 0.40 + concScore * 0.30 + cashScore * 0.20 + sectorScore * 0.10)))
+  return { score, diversification: divScore, concentration: concScore, cashReserve: cashScore, sectorBalance: sectorScore, factors }
 }
 
-function generateWarnings(sectors, positions, totalEquity, cashWeight) {
+function generateWarnings(sectors, positions, totalEquity, cashWeight, positionCount = 0, portfolioMature = true) {
   const warnings = []
+  if (!portfolioMature) {
+    warnings.push({ type: 'info', message: 'Portfolio still being constructed - rebalancing alerts activate at 5+ positions or 75% invested', severity: 'low' })
+    if (cashWeight > 0.40) warnings.push({ type: 'info', message: `High cash position (${Math.round(cashWeight * 100)}%) - capital available for new positions`, severity: 'medium' })
+    return warnings
+  }
   for (const s of sectors) {
     if (s.weight > 0.60) warnings.push({ type: 'warning', message: `${s.sector} exposure critical (${Math.round(s.weight * 100)}%)`, severity: 'critical' })
     else if (s.weight > 0.45) warnings.push({ type: 'warning', message: `${s.sector} exposure high (${Math.round(s.weight * 100)}%)`, severity: 'high' })
@@ -126,8 +187,12 @@ function generateWarnings(sectors, positions, totalEquity, cashWeight) {
   return warnings
 }
 
-function generateInsights(positions, sectors, cashWeight, performance, totalEquity) {
+function generateInsights(positions, sectors, cashWeight, performance, portfolioMature = true) {
   const insights = []
+  if (!portfolioMature) {
+    insights.push('Portfolio still being constructed - concentration insights activate at 5+ positions or 75% invested')
+    return insights
+  }
   if (sectors.length && sectors[0].weight > 0.40) insights.push(`Portfolio heavily concentrated in ${sectors[0].sector} (${Math.round(sectors[0].weight * 100)}%)`)
   if (performance.bestPerformer && performance.bestPerformerPct > 5) insights.push(`${performance.bestPerformer} contributes the most gains (+${performance.bestPerformerPct}%)`)
   if (performance.worstPerformer && performance.worstPerformerPct < -5) insights.push(`${performance.worstPerformer} is the biggest drag (${performance.worstPerformerPct}%)`)

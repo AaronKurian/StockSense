@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: StockSense AI Tools
   version: 1.0.0
-  description: Tool endpoints for StockSense AI Agent Builder. Provides market data, portfolio context, watchlist state, and recommendation persistence for AI-driven investment signal generation.
+  description: Tool endpoints for StockSense AI Agent Builder. Provides market data, portfolio context, watchlist state and recommendation persistence for AI-driven investment signal generation.
 
 servers:
   - url: https://stocksense-backend-786315542694.asia-south2.run.app
@@ -13,7 +13,7 @@ paths:
     get:
       operationId: getLatestPrice
       summary: Get the latest cached price for a ticker
-      description: Returns the most recent price, volume, and change percentage for a single ticker from the latest_prices collection. Updated in real-time via Twelve Data WebSocket.
+      description: Returns the most recent price, volume and change percentage for a single ticker from the latest_prices collection. Updated in real-time via Twelve Data WebSocket.
       parameters:
         - name: ticker
           in: query
@@ -46,7 +46,7 @@ paths:
     get:
       operationId: getPriceContext
       summary: Get technical price context for a ticker
-      description: Computes 7-day and 30-day price change percentages, trend direction, 50/200-day moving average positioning, and volume spike detection using Twelve Data time_series API. Historical data is processed in memory and never stored.
+      description: Computes 7-day and 30-day price change percentages, trend direction, 50/200-day moving average positioning and volume spike detection using Twelve Data time_series API. Historical data is processed in memory and never stored.
       parameters:
         - name: ticker
           in: query
@@ -114,7 +114,7 @@ paths:
     get:
       operationId: getPortfolio
       summary: Get all portfolio positions for a user
-      description: Returns all holdings from the portfolio_positions collection for the specified user, including ticker, quantity, average purchase price, and sector.
+      description: Returns all holdings from the portfolio_positions collection for the specified user, including ticker, quantity, average purchase price and sector.
       parameters:
         - name: userId
           in: query
@@ -215,7 +215,7 @@ paths:
     post:
       operationId: recordFeedback
       summary: Record user feedback on a recommendation
-      description: Updates a recommendation in the recommendation_log with the user's action (confirmed, ignored, or snoozed). This feedback drives the learning loop for future signal generation.
+      description: Updates a recommendation in the recommendation_log with the user's action (confirmed, ignored or snoozed). This feedback drives the learning loop for future signal generation.
       requestBody:
         required: true
         content:

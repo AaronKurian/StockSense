@@ -14,13 +14,13 @@ export default function Page() {
       <div className="flex gap-1 rounded-md border border-white/10 bg-black/30 p-1 w-fit">
         <button
           onClick={() => setTab("status")}
-          className={cn("flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-all", tab === "status" ? "bg-emerald-500/20 text-emerald-200" : "text-muted-foreground hover:text-foreground")}
+          className={cn("flex items-center gap-1.5 rounded-sm cursor-pointer px-3 py-1.5 text-xs transition-all", tab === "status" ? "bg-emerald-500/20 text-emerald-200" : "text-muted-foreground hover:text-foreground")}
         >
           <Activity className="size-3.5" /> Agent Status
         </button>
         <button
           onClick={() => setTab("chat")}
-          className={cn("flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-all", tab === "chat" ? "bg-emerald-500/20 text-emerald-200" : "text-muted-foreground hover:text-foreground")}
+          className={cn("flex items-center gap-1.5 rounded-sm cursor-pointer px-3 py-1.5 text-xs transition-all", tab === "chat" ? "bg-emerald-500/20 text-emerald-200" : "text-muted-foreground hover:text-foreground")}
         >
           <MessageSquare className="size-3.5" /> Chat
         </button>

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Brain, Radio, Shield, Zap, TrendingUp, AlertTriangle, Clock } from "lucide-react"
-import { formatTimeAgo } from "@/lib/format"
+import { formatTimeAgo, formatDateTime } from "@/lib/format"
 
 export function AgentStatusPage() {
   const { userId } = useAuth()
@@ -46,20 +46,72 @@ export function AgentStatusPage() {
         </CardContent>
       </Card>
 
+      {status.market_data && (
+        <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base"><Radio className="size-4 text-cyan-300" /> Market Data</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center gap-4">
+            <Badge variant="outline" className={
+              status.market_data.status === 'fresh'
+                ? 'border-emerald-500/30 text-emerald-200'
+                : status.market_data.status === 'mixed'
+                  ? 'border-amber-500/30 text-amber-200'
+                  : 'border-rose-500/30 text-rose-200'
+            }>
+              {status.market_data.status === 'fresh'
+                ? `Updated ${status.market_data.age_minutes != null ? `${Math.round(status.market_data.age_minutes)} min ago` : 'recently'}`
+                : status.market_data.status === 'stale'
+                  ? `Stale (${status.market_data.age_minutes != null ? `${Math.round(status.market_data.age_minutes)} min` : 'unknown'})`
+                  : status.market_data.status === 'mixed'
+                    ? `Partially stale (${status.market_data.tickers_covered}/${status.market_data.tickers_total} fresh)`
+                    : 'Unavailable'}
+            </Badge>
+            {status.market_data.last_updated_at && (
+              <span className="text-xs text-muted-foreground">
+                Last refresh: {formatDateTime(status.market_data.last_updated_at)}
+              </span>
+            )}
+            {status.market_data.stale_tickers?.length > 0 && (
+              <span className="text-xs text-rose-300/80">
+                Stale: {status.market_data.stale_tickers.join(', ')}
+              </span>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base"><Clock className="size-4 text-blue-300" /> Last Scan</CardTitle>
         </CardHeader>
         <CardContent>
           {status.last_scan ? (
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
               <div>
                 <p className="text-xs text-muted-foreground">Completed</p>
-                <p className="font-medium text-sm">{formatTimeAgo(status.last_scan.completed_at)}</p>
+                <p className="font-medium text-sm">{formatDateTime(status.last_scan.completed_at)}</p>
+                <p className="text-[10px] text-muted-foreground">{formatTimeAgo(status.last_scan.completed_at)}</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Auto-Executed</p>
-                <p className="font-medium text-sm">{status.last_scan.auto_executed} trades</p>
+                <p className="text-xs text-muted-foreground">Tickers Scanned</p>
+                <p className="font-medium text-sm">{status.last_scan.tickers_scanned ?? '-'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Recommendations</p>
+                <p className="font-medium text-sm">{status.last_scan.recommendations ?? status.last_scan.recommendations_generated ?? '-'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Executed</p>
+                <p className="font-medium text-sm">{status.last_scan.executed ?? status.last_scan.auto_executed ?? 0} trades</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Duration</p>
+                <p className="font-medium text-sm">
+                  {status.last_scan.duration_ms != null
+                    ? `${(status.last_scan.duration_ms / 1000).toFixed(1)}s`
+                    : '-'}
+                </p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Mode</p>
@@ -77,23 +129,46 @@ export function AgentStatusPage() {
           <CardTitle className="flex items-center gap-2 text-base"><Zap className="size-4 text-amber-300" /> Last 24 Hours</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className={`grid gap-4 ${status.mode === 'agentic' ? 'md:grid-cols-5' : 'md:grid-cols-4'}`}>
             <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
               <p className="font-mono text-2xl font-semibold">{status.last_24h.recommendations}</p>
               <p className="text-xs text-muted-foreground">Recommendations</p>
             </div>
-            <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
-              <p className="font-mono text-2xl font-semibold text-emerald-300">{status.last_24h.buys}</p>
-              <p className="text-xs text-muted-foreground">Buys</p>
-            </div>
-            <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
-              <p className="font-mono text-2xl font-semibold text-rose-300">{status.last_24h.sells}</p>
-              <p className="text-xs text-muted-foreground">Sells</p>
-            </div>
-            <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
-              <p className="font-mono text-2xl font-semibold">{status.pending_recommendations}</p>
-              <p className="text-xs text-muted-foreground">Pending</p>
-            </div>
+            {status.mode === 'agentic' && status.last_24h.outcomes ? (
+              <>
+                <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
+                  <p className="font-mono text-2xl font-semibold text-emerald-300">{status.last_24h.outcomes.executed}</p>
+                  <p className="text-xs text-muted-foreground">Executed</p>
+                </div>
+                <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
+                  <p className="font-mono text-2xl font-semibold text-rose-300">{status.last_24h.outcomes.blocked}</p>
+                  <p className="text-xs text-muted-foreground">Blocked</p>
+                </div>
+                <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
+                  <p className="font-mono text-2xl font-semibold">{status.last_24h.outcomes.monitoring}</p>
+                  <p className="text-xs text-muted-foreground">Monitoring</p>
+                </div>
+                <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
+                  <p className="font-mono text-2xl font-semibold text-blue-300">{status.last_24h.outcomes.awaiting_execution}</p>
+                  <p className="text-xs text-muted-foreground">Awaiting Execution</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
+                  <p className="font-mono text-2xl font-semibold text-emerald-300">{status.last_24h.buys}</p>
+                  <p className="text-xs text-muted-foreground">Buys</p>
+                </div>
+                <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
+                  <p className="font-mono text-2xl font-semibold text-rose-300">{status.last_24h.sells}</p>
+                  <p className="text-xs text-muted-foreground">Sells</p>
+                </div>
+                <div className="rounded-md border border-white/10 bg-black/30 p-3 text-center">
+                  <p className="font-mono text-2xl font-semibold">{status.pending_recommendations}</p>
+                  <p className="text-xs text-muted-foreground">Pending Approval</p>
+                </div>
+              </>
+            )}
           </div>
           {status.last_24h.recommendations > 0 && (
             <div className="mt-4 flex flex-wrap gap-2">
@@ -160,15 +235,15 @@ export function AgentStatusPage() {
           </div>
           <div className="flex gap-3 items-start">
             <span className="shrink-0 size-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-[10px] text-emerald-200 font-bold">2</span>
-            <p>Generates BUY/SELL recommendations with confidence scores (min <span className="text-foreground font-medium">{Math.round(status.config.min_confidence * 100)}%</span>)</p>
+            <p>Generates signals with confidence scores (min <span className="text-foreground font-medium">{Math.round(status.config.min_confidence * 100)}%</span>) and validates each against your rules</p>
           </div>
           <div className="flex gap-3 items-start">
             <span className="shrink-0 size-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-[10px] text-emerald-200 font-bold">3</span>
-            <p>{status.mode === 'agentic' ? 'Automatically executes trades within your risk parameters' : 'Waits for your approval before executing'}</p>
+            <p>{status.mode === 'agentic' ? 'Executes eligible trades automatically, blocks ineligible ones and monitors the rest' : 'Waits for your approval before executing'}</p>
           </div>
           <div className="flex gap-3 items-start">
             <span className="shrink-0 size-6 rounded-full bg-blue-500/20 flex items-center justify-center text-[10px] text-blue-200 font-bold">⚡</span>
-            <p>Protects with stop-loss (<span className="text-rose-300">-{status.portfolio.stop_loss_pct}%</span>), take-profit (<span className="text-emerald-300">+{status.portfolio.take_profit_pct}%</span>), and trailing stops</p>
+            <p>Protects with stop-loss (<span className="text-rose-300">-{status.portfolio.stop_loss_pct}%</span>), take-profit (<span className="text-emerald-300">+{status.portfolio.take_profit_pct}%</span>) and trailing stops</p>
           </div>
           {status.mode === 'agentic' && (
             <div className="flex gap-3 items-start">

@@ -1,13 +1,15 @@
 "use client"
 import { useAuth } from "@/hooks/useAuth"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useRef, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { fetchSignals } from "@/lib/api"
-import { formatPct } from "@/lib/format"
+import { fetchSignalHistory, fetchPreferences } from "@/lib/api"
+import { formatDateTime, formatTimeOnly } from "@/lib/format"
+import { getDisplayStatus, getDisplayStatusLabel, STATUS_BADGE_STYLES } from "@/lib/recommendationStatus"
 
 const signalColor = {
   BUY:       "border-emerald-500/30 bg-emerald-500/10 text-emerald-100",
@@ -17,22 +19,26 @@ const signalColor = {
   REBALANCE: "border-purple-500/30 bg-purple-500/10 text-purple-100",
 }
 
-const actionColor = {
-  confirmed: "border-emerald-500/30 bg-emerald-500/10 text-emerald-100",
-  ignored:   "border-white/15 bg-white/5 text-slate-100",
-  snoozed:   "border-amber-500/30 bg-amber-500/10 text-amber-100",
-}
-
-export default function HistoryPage() {
+function HistoryPageContent() {
   useEffect(() => { document.title = "History - StockSense" }, [])
+  const searchParams = useSearchParams()
+  const highlightRecId = searchParams.get("recId")
+  const highlightRef = useRef(null)
   const { userId } = useAuth()
   const [recs, setRecs]     = useState([])
+  const [mode, setMode]     = useState('manual')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!userId) return
-    fetchSignals(userId, { limit: 100 })
-      .then(setRecs)
+    Promise.all([
+      fetchSignalHistory(userId, 100),
+      fetchPreferences(userId).catch(() => ({ mode: 'manual' })),
+    ])
+      .then(([signals, prefs]) => {
+        setRecs(signals)
+        setMode(prefs?.mode === 'manual' ? 'manual' : 'agentic')
+      })
       .catch(err => {
         console.error(err)
         toast.error('Could not load history', { description: err.message })
@@ -40,18 +46,24 @@ export default function HistoryPage() {
       .finally(() => setLoading(false))
   }, [userId])
 
+  useEffect(() => {
+    if (!highlightRecId || loading) return
+    const t = setTimeout(() => highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 150)
+    return () => clearTimeout(t)
+  }, [highlightRecId, loading, recs.length])
+
   const total       = recs.length
   const avgConf     = total > 0
     ? Math.round(recs.reduce((s, r) => s + (r.confidence ?? 0), 0) / total * 100)
     : 0
-  const confirmed   = recs.filter(r => r.user_action === 'confirmed').length
-  const withAction  = recs.filter(r => r.user_action).length
+  const executed    = recs.filter(r => r.status === 'executed').length
+  const rejected    = recs.filter(r => r.status === 'rejected').length
 
   const stats = [
     ['Total signals',   String(total)],
     ['Avg confidence',  `${avgConf}%`],
-    ['Confirmed',       String(confirmed)],
-    ['With feedback',   String(withAction)],
+    ['Executed',        String(executed)],
+    ['Rejected',        String(rejected)],
   ]
 
   return (
@@ -59,13 +71,10 @@ export default function HistoryPage() {
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Recommendation history</h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          All signals saved to{' '}
-          <span className="font-mono text-emerald-200">recommendation_log</span> - confirms and ignores feed
-          the learning loop.
+          Complete log of AI decisions, execution results and lifecycle status.
         </p>
       </div>
 
-      {}
       <div className="grid gap-4 md:grid-cols-4">
         {stats.map(([k, v]) => (
           <Card key={k} className="rounded-2xl border-white/10 bg-white/[0.03]">
@@ -80,7 +89,6 @@ export default function HistoryPage() {
         ))}
       </div>
 
-      {}
       <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
         <CardHeader>
           <CardTitle className="text-base">Logged recommendations</CardTitle>
@@ -99,50 +107,83 @@ export default function HistoryPage() {
               <caption className="sr-only">Logged AI recommendations</caption>
               <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
-                  <th scope="col" className="pb-3 font-medium">Date</th>
+                  <th scope="col" className="pb-3 font-medium">Generated</th>
+                  <th scope="col" className="pb-3 font-medium">Executed / Checked</th>
                   <th scope="col" className="pb-3 font-medium">Ticker</th>
                   <th scope="col" className="pb-3 font-medium">Signal</th>
                   <th scope="col" className="pb-3 font-medium">Confidence</th>
-                  <th scope="col" className="pb-3 font-medium">User action</th>
+                  <th scope="col" className="pb-3 font-medium">Status</th>
                   <th scope="col" className="pb-3 font-medium">Rationale</th>
                 </tr>
               </thead>
               <tbody>
-                {recs.map((rec) => (
-                  <tr key={rec._id?.toString() ?? rec.ticker + rec.created_at} className="border-t border-white/5">
-                    <td className="py-3 text-muted-foreground text-xs">
-                      {rec.created_at
-                        ? new Date(rec.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' })
-                        : '-'}
-                    </td>
-                    <td className="py-3 font-semibold">{rec.ticker}</td>
-                    <td className="py-3">
-                      <Badge variant="outline" className={signalColor[rec.signal] ?? ''}>
-                        {rec.signal}
-                      </Badge>
-                    </td>
-                    <td className="py-3 font-mono">
-                      {rec.confidence != null ? `${Math.round(rec.confidence * 100)}%` : '-'}
-                    </td>
-                    <td className="py-3">
-                      {rec.user_action ? (
-                        <Badge variant="outline" className={actionColor[rec.user_action] ?? ''}>
-                          {rec.user_action}
+                {recs.map((rec) => {
+                  const recId = rec._id?.toString()
+                  const isHighlighted = highlightRecId && recId === highlightRecId
+                  const displayKey = getDisplayStatus(rec, { mode })
+                  const label = getDisplayStatusLabel(rec, { mode })
+                  const isMonitoring = rec.status === 'generated' && (rec.signal === 'HOLD' || rec.signal === 'WATCH')
+                  const followUp = isMonitoring
+                    ? (rec.checked_at || rec.updated_at)
+                    : rec.executed_at
+                  return (
+                    <tr
+                      key={recId ?? rec.ticker + rec.created_at}
+                      ref={isHighlighted ? highlightRef : undefined}
+                      className={`border-t border-white/5 ${isHighlighted ? "bg-emerald-500/10 ring-1 ring-inset ring-emerald-500/30" : ""}`}
+                    >
+                      <td className="py-3 text-muted-foreground text-xs whitespace-nowrap">
+                        {formatDateTime(rec.created_at)}
+                      </td>
+                      <td className="py-3 text-muted-foreground text-xs whitespace-nowrap" title={isMonitoring ? 'Last checked' : 'Executed'}>
+                        {followUp ? (
+                          <span>
+                            {isMonitoring && <span className="text-[10px] opacity-60 block">Checked</span>}
+                            {formatTimeOnly(followUp)}
+                          </span>
+                        ) : '-'}
+                      </td>
+                      <td className="py-3 font-semibold">{rec.ticker}</td>
+                      <td className="py-3">
+                        <Badge variant="outline" className={signalColor[rec.signal] ?? ''}>
+                          {rec.signal}
                         </Badge>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">pending</span>
-                      )}
-                    </td>
-                    <td className="py-3 text-muted-foreground max-w-xs truncate text-xs">
-                      {rec.rationale?.slice(0, 80) ?? '-'}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="py-3 font-mono">
+                        {rec.confidence != null ? `${Math.round(rec.confidence * 100)}%` : '-'}
+                      </td>
+                      <td className="py-3">
+                        <Badge variant="outline" className={STATUS_BADGE_STYLES[displayKey] ?? ''}>
+                          {label}
+                        </Badge>
+                      </td>
+                      <td title={rec.rationale} className="py-3 text-muted-foreground max-w-xs truncate text-xs">
+                        {rec.rationale ?? '-'}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           )}
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+export default function HistoryPage() {
+  return (
+    <Suspense fallback={
+      <div className="space-y-8">
+        <Skeleton className="h-10 w-64 bg-white/5" />
+        <div className="grid gap-4 md:grid-cols-4">
+          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 rounded-2xl bg-white/5" />)}
+        </div>
+        <Skeleton className="h-96 rounded-2xl bg-white/5" />
+      </div>
+    }>
+      <HistoryPageContent />
+    </Suspense>
   )
 }

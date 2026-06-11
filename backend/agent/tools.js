@@ -7,7 +7,7 @@ import {
 
 export const getLatestPrice = new FunctionTool({
   name: 'get_latest_price',
-  description: 'Get the latest cached price, volume, and change percentage for a stock ticker. Updated in real-time via Twelve Data WebSocket.',
+  description: 'Get the latest cached price, volume and change percentage for a stock ticker. Updated in real-time via Twelve Data WebSocket.',
   parameters: z.object({
     ticker: z.string().describe('Stock ticker symbol, e.g. AAPL, MSFT, NVDA'),
   }),
@@ -40,7 +40,7 @@ export const getMarketNews = new FunctionTool({
 
 export const getPortfolio = new FunctionTool({
   name: 'get_portfolio',
-  description: 'Get all portfolio positions for a user including ticker, quantity, average price, and sector.',
+  description: 'Get all portfolio positions for a user including ticker, quantity, average price and sector.',
   parameters: z.object({
     userId: z.string().describe('User identifier'),
   }),

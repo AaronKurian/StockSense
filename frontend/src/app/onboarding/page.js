@@ -1,99 +1,23 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import Link from "next/link"
+import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { AnimatePresence, motion } from "framer-motion"
-import { Check, ChevronLeft, Loader2, Search, Sparkles, X } from "lucide-react"
+import { Check, ChevronLeft, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
-import { searchStocks, completeOnboarding } from "@/lib/api"
+import { completeOnboarding } from "@/lib/api"
+import { requestInitialAgentScan } from "@/lib/events"
 import { SectorChipSelector } from "@/components/common/SectorChipSelector"
-
-const sectorStocks = {
-  Technology: [
-    { ticker: "AAPL", name: "Apple" },
-    { ticker: "MSFT", name: "Microsoft" },
-    { ticker: "NVDA", name: "NVIDIA" },
-    { ticker: "AMD", name: "AMD" },
-    { ticker: "GOOGL", name: "Google" },
-    { ticker: "META", name: "Meta" },
-  ],
-  Healthcare: [
-    { ticker: "JNJ", name: "Johnson & Johnson" },
-    { ticker: "UNH", name: "UnitedHealth" },
-    { ticker: "PFE", name: "Pfizer" },
-    { ticker: "ABBV", name: "AbbVie" },
-    { ticker: "MRK", name: "Merck" },
-  ],
-  Financials: [
-    { ticker: "JPM", name: "JPMorgan" },
-    { ticker: "BAC", name: "Bank of America" },
-    { ticker: "GS", name: "Goldman Sachs" },
-    { ticker: "V", name: "Visa" },
-    { ticker: "MA", name: "Mastercard" },
-  ],
-  Energy: [
-    { ticker: "XOM", name: "Exxon Mobil" },
-    { ticker: "CVX", name: "Chevron" },
-    { ticker: "SHEL", name: "Shell" },
-    { ticker: "BP", name: "BP" },
-    { ticker: "COP", name: "ConocoPhillips" },
-  ],
-  Industrials: [
-    { ticker: "CAT", name: "Caterpillar" },
-    { ticker: "GE", name: "GE Aerospace" },
-    { ticker: "HON", name: "Honeywell" },
-    { ticker: "UPS", name: "UPS" },
-    { ticker: "BA", name: "Boeing" },
-  ],
-  Utilities: [
-    { ticker: "NEE", name: "NextEra Energy" },
-    { ticker: "DUK", name: "Duke Energy" },
-    { ticker: "SO", name: "Southern Co" },
-    { ticker: "AEP", name: "American Electric" },
-  ],
-  "Consumer Defensive": [
-    { ticker: "PG", name: "Procter & Gamble" },
-    { ticker: "KO", name: "Coca-Cola" },
-    { ticker: "PEP", name: "PepsiCo" },
-    { ticker: "WMT", name: "Walmart" },
-    { ticker: "COST", name: "Costco" },
-  ],
-  "Consumer Cyclical": [
-    { ticker: "AMZN", name: "Amazon" },
-    { ticker: "TSLA", name: "Tesla" },
-    { ticker: "NKE", name: "Nike" },
-    { ticker: "MCD", name: "McDonald's" },
-    { ticker: "HD", name: "Home Depot" },
-  ],
-  "Communication Services": [
-    { ticker: "GOOGL", name: "Alphabet" },
-    { ticker: "META", name: "Meta" },
-    { ticker: "NFLX", name: "Netflix" },
-    { ticker: "DIS", name: "Disney" },
-    { ticker: "CMCSA", name: "Comcast" },
-  ],
-  "Real Estate": [
-    { ticker: "AMT", name: "American Tower" },
-    { ticker: "PLD", name: "Prologis" },
-    { ticker: "EQIX", name: "Equinix" },
-    { ticker: "SPG", name: "Simon Property" },
-  ],
-  Materials: [
-    { ticker: "LIN", name: "Linde" },
-    { ticker: "APD", name: "Air Products" },
-    { ticker: "SHW", name: "Sherwin-Williams" },
-    { ticker: "FCX", name: "Freeport-McMoRan" },
-  ],
-}
+import { WatchlistStockSelector } from "@/components/common/WatchlistStockSelector"
 
 const baseSteps = [
   { key: "risk", question: "What is your risk appetite?", chips: ["Conservative", "Moderate", "Aggressive"] },
   { key: "horizon", question: "What is your investment horizon?", chips: ["Short (< 1 year)", "Medium (1-5 years)", "Long (5+ years)"] },
-  { key: "sectors", question: "Which sectors interest you? (select any — optional)" },
+  { key: "sectors", question: "Which sectors interest you? (select any - optional)" },
   { key: "watchlist", question: "Which stocks would you like StockSense to monitor?", chips: [] },
 ]
 
@@ -114,168 +38,27 @@ function useTypedQuestion(text, active) {
 }
 
 function WatchlistStep({ sectors, selectedTickers, setSelectedTickers, onConfirm, onSkip, onBack }) {
-  const [query, setQuery] = useState("")
-  const [results, setResults] = useState([])
-  const [searching, setSearching] = useState(false)
-  const [noResults, setNoResults] = useState(false)
-  const debounceRef = useRef(null)
-  const abortRef = useRef(null)
-
-  const sectorList = Array.isArray(sectors) && sectors.length ? sectors : ["Technology"]
-  const suggestions = sectorList.flatMap((s) => sectorStocks[s] || []).filter(
-    (item, idx, arr) => arr.findIndex((x) => x.ticker === item.ticker) === idx
-  ).slice(0, 12)
-
-  const handleSearch = useCallback((value) => {
-    setQuery(value)
-    setNoResults(false)
-
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (abortRef.current) abortRef.current.abort()
-
-    if (value.length < 2) {
-      setResults([])
-      setSearching(false)
-      return
-    }
-
-    setSearching(true)
-    debounceRef.current = setTimeout(async () => {
-      const controller = new AbortController()
-      abortRef.current = controller
-      try {
-        const data = await searchStocks(value)
-        if (!controller.signal.aborted) {
-          setResults(data || [])
-          setNoResults(!data?.length)
-          setSearching(false)
-        }
-      } catch {
-        if (!controller.signal.aborted) {
-          setResults([])
-          setSearching(false)
-        }
-      }
-    }, 300)
-  }, [])
-
-  const toggleTicker = (ticker, name) => {
-    setSelectedTickers((prev) => {
-      const exists = prev.find((t) => t.ticker === ticker)
-      if (exists) return prev.filter((t) => t.ticker !== ticker)
-      if (prev.length >= 20) return prev
-      return [...prev, { ticker, name }]
-    })
-  }
-
-  const removeTicker = (ticker) => {
-    setSelectedTickers((prev) => prev.filter((t) => t.ticker !== ticker))
-  }
-
-  const isSelected = (ticker) => selectedTickers.some((t) => t.ticker === ticker)
-
+  const maxStocks = 20
   return (
     <div className="space-y-3">
-      {}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <input
-          type="text"
-          placeholder="Search by company name or ticker..."
-          value={query}
-          onChange={(e) => handleSearch(e.target.value)}
-          className="w-full rounded-xl border border-white/15 bg-black/40 py-2.5 pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
-        />
-        {searching && (
-          <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
-        )}
-      </div>
-
-      {}
-      {results.length > 0 && (
-        <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border border-white/10 bg-black/30 p-2">
-          {results.map((r) => (
-            <button
-              key={`${r.symbol}-${r.exchange}`}
-              onClick={() => toggleTicker(r.symbol, r.name)}
-              className={cn(
-                "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                isSelected(r.symbol)
-                  ? "bg-emerald-500/20 text-emerald-100"
-                  : "hover:bg-white/5"
-              )}
-            >
-              <div className="min-w-0 flex-1">
-                <span className="font-medium">{r.name}</span>
-                <span className="ml-2 text-xs text-muted-foreground">({r.symbol})</span>
-                <span className="ml-2 text-xs text-muted-foreground/60">{r.exchange}</span>
-              </div>
-              {isSelected(r.symbol) && <Check className="size-4 shrink-0 text-emerald-400" />}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {noResults && query.length >= 2 && !searching && (
-        <p className="text-center text-xs text-muted-foreground">No matching stocks found.</p>
-      )}
-
-      {}
-      {selectedTickers.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-medium text-muted-foreground">
-            Selected ({selectedTickers.length}/20)
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {selectedTickers.map((s) => (
-              <span
-                key={s.ticker}
-                className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-200"
-              >
-                {s.ticker}
-                <button
-                  onClick={() => removeTicker(s.ticker)}
-                  className="ml-0.5 rounded-full p-0.5 hover:bg-emerald-500/20"
-                  aria-label={`Remove ${s.ticker}`}
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {}
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground">
-          Popular {sector || "Technology"} stocks
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {suggestions.map((stock) => {
-            const selected = isSelected(stock.ticker)
-            return (
-              <Button
-                key={stock.ticker}
-                variant="outline"
-                size="sm"
-                className={cn(
-                  "rounded-full px-3 text-xs transition-all",
-                  selected
-                    ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30"
-                    : "border-white/15 bg-black/30 hover:border-emerald-500/40 hover:bg-emerald-500/10"
-                )}
-                onClick={() => toggleTicker(stock.ticker, stock.name)}
-              >
-                {stock.name} <span className="text-muted-foreground">({stock.ticker})</span>
-                {selected && <Check className="ml-1.5 size-3" />}
-              </Button>
-            )
-          })}
-        </div>
-      </div>
-
-      {}
+      <p className="text-xs font-medium text-muted-foreground">
+        Selected ({selectedTickers.length}/{maxStocks})
+      </p>
+      <WatchlistStockSelector
+        sectors={sectors}
+        stocks={selectedTickers}
+        maxStocks={maxStocks}
+        listVariant="chips"
+        onAdd={async (ticker, name) => {
+          setSelectedTickers((prev) => {
+            if (prev.find((t) => t.ticker === ticker) || prev.length >= maxStocks) return prev
+            return [...prev, { ticker, name }]
+          })
+        }}
+        onRemove={async (ticker) => {
+          setSelectedTickers((prev) => prev.filter((t) => t.ticker !== ticker))
+        }}
+      />
       <div className="flex items-center gap-2 pt-1">
         {onBack && (
           <Button
@@ -310,13 +93,33 @@ function WatchlistStep({ sectors, selectedTickers, setSelectedTickers, onConfirm
   )
 }
 
+function formatSavedAnswer(value) {
+  if (value == null || value === "") return null
+  if (Array.isArray(value)) return value.join(", ")
+  return String(value)
+}
+
 export default function OnboardingFlow() {
   useEffect(() => { document.title = "Onboarding - StockSense" }, [])
+  const router = useRouter()
   const [step, setStep] = useState(0)
   const [answers, setAnswers] = useState({})
   const [sectorSelection, setSectorSelection] = useState([])
   const [selectedTickers, setSelectedTickers] = useState([])
   const [done, setDone] = useState(false)
+  const [redirectCount, setRedirectCount] = useState(5)
+
+  useEffect(() => {
+    if (!done) return
+    if (redirectCount === 0) {
+      router.push("/dashboard")
+      return
+    }
+    const t = setTimeout(() => setRedirectCount((c) => c - 1), 1000)
+    return () => clearTimeout(t)
+  }, [done, redirectCount, router])
+
+  const goToDashboard = () => router.push("/dashboard")
 
   const steps = useMemo(() => baseSteps, [])
   const current = steps[step]
@@ -334,6 +137,7 @@ export default function OnboardingFlow() {
       setStep((s) => s + 1)
     } else {
       setDone(true)
+      requestInitialAgentScan()
 
       const sectorPrefs = Array.isArray(updatedAnswers.sectors) ? updatedAnswers.sectors : []
       completeOnboarding({
@@ -405,9 +209,9 @@ export default function OnboardingFlow() {
                       <p className="font-semibold text-foreground">
                         {s.question.length > 38 ? s.question.slice(0, 38) + "…" : s.question}
                       </p>
-                      {answers[s.key] ? (
+                      {formatSavedAnswer(answers[s.key]) ? (
                         <p className="mt-1 truncate text-[11px] text-emerald-200/90">
-                          Saved: {answers[s.key]}
+                          Saved: {formatSavedAnswer(answers[s.key])}
                         </p>
                       ) : null}
                     </div>
@@ -531,13 +335,14 @@ export default function OnboardingFlow() {
                       <div>
                         <p className="text-sm font-medium text-emerald-100">Onboarding complete</p>
                         <h2 className="text-2xl font-semibold tracking-tight">Your agent is calibrated.</h2>
+                        <p className="mt-1 text-sm text-muted-foreground">Your first agent scan will start automatically on the dashboard.</p>
                       </div>
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       {Object.entries({
                         "Risk appetite": answers.risk ?? "-",
                         "Horizon": answers.horizon ?? "-",
-                        "Sectors": answers.sectors ?? "-",
+                        "Sectors": formatSavedAnswer(answers.sectors) ?? "-",
                         "Watchlist": answers.watchlist ?? "-",
                       }).map(([k, v]) => (
                         <div key={k} className="rounded-md border border-white/10 bg-black/30 p-3 text-sm">
@@ -546,21 +351,20 @@ export default function OnboardingFlow() {
                         </div>
                       ))}
                     </div>
-                    <div className="flex flex-wrap gap-3">
+                    <div className="flex justify-center">
                       <Button
-                        asChild
                         size="lg"
+                        onClick={goToDashboard}
                         className="rounded-2xl bg-gradient-to-r from-emerald-500 to-blue-500 px-8 text-emerald-950"
                       >
-                        <Link href="/dashboard">Enter command center</Link>
-                      </Button>
-                      <Button asChild size="lg" variant="outline" className="rounded-2xl border-white/15">
-                        <Link href="/signals">Preview signals</Link>
+                        {redirectCount > 0
+                          ? `You'll be redirected to dashboard in ${redirectCount}`
+                          : "Redirecting to dashboard…"}
                       </Button>
                     </div>
                   </CardContent>
                 </Card>
-                <motion.div
+                {/* <motion.div
                   aria-hidden
                   className="pointer-events-none flex justify-center gap-2"
                   initial={{ opacity: 0 }}
@@ -575,7 +379,7 @@ export default function OnboardingFlow() {
                       transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.05 }}
                     />
                   ))}
-                </motion.div>
+                </motion.div> */}
               </motion.div>
             )}
           </AnimatePresence>

@@ -7,16 +7,21 @@ import { connect, getDb, getCollection } from "./config/db.js"
 import { requireAuth } from "./middleware/auth.js"
 import {
   get_portfolio, get_latest_price, get_watchlist, get_price_context, get_market_news,
-  getWatchlists, getWatchlistItems, getRecommendationsForUser,
+  getWatchlists, getWatchlistItems, getRecommendationsForUser, getRecommendationHistory,
   getLatestRecommendationsForTickers, recordFeedback, saveRecommendation, calculateSectorAllocation,
   approveRecommendation, rejectRecommendation, executeRecommendation, getRecommendationsByStatus,
-  createWatchlist, addWatchlistItem
+  createWatchlist, addWatchlistItem, removeWatchlistItem, getOrCreatePrimaryWatchlist, getScanTickers
 } from "./services/agent.js"
+import { getMetadataBatch, getTickerMetadata } from "./services/metadata.js"
+import { resolveLatestPrice, getMarketDataFreshness } from "./services/prices.js"
+import { getApiUsageSummary } from "./lib/apiUsage.js"
+import { logApiUsage } from "./lib/apiUsage.js"
+import { resolveSector } from "./lib/sectors.js"
 import { getLatestPricesBatch } from "./services/prices.js"
 import { startWebSocket, stopWebSocket, getSubscribedTickers } from "./services/websocket.js"
 import { addClient, removeClient, getClientCount } from "./services/sse.js"
 import { getPreferences, createDefaultPreferences, updatePreferences } from "./services/preferences.js"
-import { createVirtualTrade, closeVirtualTrade, getVirtualTrades, getTradeStats, validateExecution, getVirtualCash, calculatePositionSize, markToMarket } from "./services/trades.js"
+import { createVirtualTrade, closeVirtualTrade, getVirtualTrades, getTradeStats, validateExecution, getVirtualCash, calculatePositionSize, markToMarket, getPortfolioSummary } from "./services/trades.js"
 import { createNotification, getNotifications, markRead, markAllRead, getUnreadCount } from "./services/notifications.js"
 import { runAutonomousExecution, acquireScanLock, releaseScanLock } from "./services/autonomy.js"
 import { runAgent } from "./agent/index.js"
@@ -142,6 +147,26 @@ app.get('/auth/me', async (req, res) => {
   }
 })
 
+app.patch('/auth/me', requireAuth, async (req, res) => {
+  try {
+    const { name } = req.body
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'name is required' })
+    }
+    const col = getCollection('users')
+    if (!col) return res.status(500).json({ error: 'DB not connected' })
+    const trimmed = name.trim().slice(0, 100)
+    await col.updateOne({ _id: req.userId }, { $set: { name: trimmed, updated_at: new Date() } })
+    const user = await col.findOne({ _id: req.userId })
+    if (!user) return res.status(404).json({ error: 'User not found' })
+    const { password: _, ...safe } = user
+    res.json(safe)
+  } catch (err) {
+    logError('auth', 'Profile update failed', { userId: req.userId, error: err.message })
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.delete('/auth/account', requireAuth, async (req, res) => {
   try {
     const userId = req.userId
@@ -198,6 +223,16 @@ app.get('/api/portfolio', async (req, res) => {
   }
 })
 
+app.get('/api/portfolio/summary', async (req, res) => {
+  try {
+    const { userId } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json(await getPortfolioSummary(userId))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.get('/api/portfolio/sectors', async (req, res) => {
   try {
     const { userId } = req.query
@@ -213,6 +248,89 @@ app.get('/api/watchlists', async (req, res) => {
     const { userId } = req.query
     if (!userId) return res.status(400).json({ error: 'userId is required' })
     res.json(await getWatchlists(userId))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/watchlists/managed', async (req, res) => {
+  try {
+    const { userId } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    const prefs = await getPreferences(userId)
+    const maxStocks = prefs?.max_stocks || 15
+    const wl = await getOrCreatePrimaryWatchlist(userId)
+    const items = await getWatchlistItems(wl._id)
+    const metaMap = items.length ? await getMetadataBatch(items.map(i => i.ticker)) : new Map()
+    res.json({
+      watchlistId: wl._id,
+      max_stocks: maxStocks,
+      count: items.length,
+      items: items.map(i => ({
+        ticker: i.ticker,
+        name: i.name || metaMap.get(i.ticker)?.name || i.ticker,
+        sector: i.sector || metaMap.get(i.ticker)?.sector || null,
+      })),
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/watchlists/managed/items', async (req, res) => {
+  try {
+    const { userId, ticker, name, sector } = req.body
+    if (!userId || !ticker) return res.status(400).json({ error: 'userId and ticker are required' })
+    const prefs = await getPreferences(userId)
+    const maxStocks = prefs?.max_stocks || 15
+    const wl = await getOrCreatePrimaryWatchlist(userId)
+    const items = await getWatchlistItems(wl._id)
+    const t = String(ticker).trim().toUpperCase()
+    if (!items.find(i => i.ticker === t) && items.length >= maxStocks) {
+      return res.status(400).json({ error: `Maximum ${maxStocks} stocks monitored` })
+    }
+    const meta = await getTickerMetadata(t)
+    const resolvedSector = resolveSector(t, meta.sector, sector)
+    await addWatchlistItem({ watchlistId: wl._id, ticker: t, name: name || meta.name, sector: resolvedSector })
+    resolveLatestPrice(t).catch(() => {})
+    const updated = await getWatchlistItems(wl._id)
+    const metaMap = updated.length ? await getMetadataBatch(updated.map(i => i.ticker)) : new Map()
+    res.json({
+      watchlistId: wl._id,
+      max_stocks: maxStocks,
+      count: updated.length,
+      items: updated.map(i => ({
+        ticker: i.ticker,
+        name: i.name || metaMap.get(i.ticker)?.name || i.ticker,
+        sector: i.sector || metaMap.get(i.ticker)?.sector || null,
+      })),
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.delete('/api/watchlists/managed/items/:ticker', async (req, res) => {
+  try {
+    const { userId } = req.query
+    const { ticker } = req.params
+    if (!userId || !ticker) return res.status(400).json({ error: 'userId and ticker are required' })
+    const prefs = await getPreferences(userId)
+    const maxStocks = prefs?.max_stocks || 15
+    const wl = await getOrCreatePrimaryWatchlist(userId)
+    await removeWatchlistItem({ watchlistId: wl._id, ticker })
+    const items = await getWatchlistItems(wl._id)
+    const metaMap = items.length ? await getMetadataBatch(items.map(i => i.ticker)) : new Map()
+    res.json({
+      watchlistId: wl._id,
+      max_stocks: maxStocks,
+      count: items.length,
+      items: items.map(i => ({
+        ticker: i.ticker,
+        name: i.name || metaMap.get(i.ticker)?.name || i.ticker,
+        sector: i.sector || metaMap.get(i.ticker)?.sector || null,
+      })),
+    })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -254,29 +372,20 @@ app.get('/api/watchlists/:watchlistId/items', async (req, res) => {
 
 app.get('/api/signals', async (req, res) => {
   try {
-    const { userId, limit, signal: signalFilter, since } = req.query
+    const { userId, limit, signal: signalFilter, since, status } = req.query
     if (!userId) return res.status(400).json({ error: 'userId is required' })
     res.json(await getRecommendationsForUser(userId, {
       limit: limit ? Number(limit) : 50,
       since: since || null,
-      signal: signalFilter || null
+      signal: signalFilter || null,
+      status: status || null,
     }))
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
-app.patch('/api/signals/:id/feedback', async (req, res) => {
-  try {
-    const { user_action } = req.body
-    if (!user_action) return res.status(400).json({ error: 'user_action is required' })
-    res.json(await recordFeedback(req.params.id, user_action))
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-app.get('/api/actions/pending', async (req, res) => {
+app.get('/api/signals/pending', async (req, res) => {
   try {
     const { userId, limit } = req.query
     if (!userId) return res.status(400).json({ error: 'userId is required' })
@@ -286,23 +395,30 @@ app.get('/api/actions/pending', async (req, res) => {
   }
 })
 
-app.get('/api/actions/completed', async (req, res) => {
+app.get('/api/signals/completed', async (req, res) => {
   try {
     const { userId, limit } = req.query
     if (!userId) return res.status(400).json({ error: 'userId is required' })
-    const col = getCollection('recommendation_log')
-    if (!col) return res.json([])
-    const results = await col.find({
-      userId,
-      status: { $in: ['executed', 'approved', 'rejected', 'expired'] }
-    }).sort({ created_at: -1 }).limit(limit ? Number(limit) : 50).toArray()
-    res.json(results)
+    res.json(await getRecommendationsForUser(userId, {
+      limit: limit ? Number(limit) : 50,
+      status: 'completed',
+    }))
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
-app.post('/api/actions/:id/approve', async (req, res) => {
+app.get('/api/signals/history', async (req, res) => {
+  try {
+    const { userId, limit } = req.query
+    if (!userId) return res.status(400).json({ error: 'userId is required' })
+    res.json(await getRecommendationHistory(userId, { limit: limit ? Number(limit) : 100 }))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/signals/:id/approve', async (req, res) => {
   try {
     const col = getCollection('recommendation_log')
     const { ObjectId } = await import('mongodb')
@@ -318,8 +434,8 @@ app.post('/api/actions/:id/approve', async (req, res) => {
     const action = rec.signal === 'BUY' ? 'BUY' : rec.signal === 'EXIT' ? 'SELL' : null
 
     if (!action) {
-      const result = await executeRecommendation(req.params.id)
-      info('actions', 'Non-tradeable signal approved', { userId: rec.userId, ticker: rec.ticker, signal: rec.signal })
+      const result = await executeRecommendation(req.params.id, { execution_mode: 'manual' })
+      info('signals', 'Non-tradeable signal approved', { userId: rec.userId, ticker: rec.ticker, signal: rec.signal })
       return res.json({ recommendation: result, trade: null, sizing: null })
     }
 
@@ -329,7 +445,7 @@ app.post('/api/actions/:id/approve', async (req, res) => {
 
     const validation = await validateExecution({ userId: rec.userId, ticker: rec.ticker, action, confidence: rec.confidence, price })
     if (!validation.allowed) {
-      warn('actions', 'Execution validation failed', { userId: rec.userId, ticker: rec.ticker, reason: validation.reason })
+      warn('signals', 'Execution validation failed', { userId: rec.userId, ticker: rec.ticker, reason: validation.reason })
       return res.status(422).json({ error: validation.reason })
     }
 
@@ -352,35 +468,48 @@ app.post('/api/actions/:id/approve', async (req, res) => {
       sizing = { quantity, note: 'full position exit' }
     }
 
-    const executed = await executeRecommendation(req.params.id)
+    const executed = await executeRecommendation(req.params.id, { execution_mode: 'manual' })
     const trade = await createVirtualTrade({
       userId: rec.userId, ticker: rec.ticker, action,
       quantity, entry_price: price,
       signal_id: rec._id?.toString(), rationale: rec.rationale
     })
 
+    const { formatTradeTitle, formatTradeMessage } = await import('./services/notifications.js')
     await createNotification({
-      userId: rec.userId, type: 'trade_executed',
-      title: `${action} ${rec.ticker} - ${quantity} shares @ $${price.toFixed(2)}`,
-      message: rec.rationale?.slice(0, 120) || '',
-      ticker: rec.ticker, recId: rec._id?.toString()
+      userId: rec.userId,
+      type: 'trade_executed',
+      title: formatTradeTitle(action, rec.ticker),
+      message: formatTradeMessage({ quantity, price, mode: 'manual' }),
+      ticker: rec.ticker,
+      recId: rec._id?.toString(),
     })
 
-    info('actions', 'Trade executed via approve', { userId: rec.userId, ticker: rec.ticker, action, quantity, price })
+    info('signals', 'Trade executed via approve', { userId: rec.userId, ticker: rec.ticker, action, quantity, price })
     res.json({ recommendation: executed, trade, sizing })
   } catch (err) {
-    logError('actions', 'Approve failed', { id: req.params.id, error: err.message })
+    logError('signals', 'Approve failed', { id: req.params.id, error: err.message })
     res.status(500).json({ error: err.message })
   }
 })
 
-app.post('/api/actions/:id/reject', async (req, res) => {
+app.post('/api/signals/:id/reject', async (req, res) => {
   try {
     const result = await rejectRecommendation(req.params.id)
-    info('actions', 'Recommendation rejected', { id: req.params.id })
+    info('signals', 'Recommendation rejected', { id: req.params.id })
     res.json(result)
   } catch (err) {
-    logError('actions', 'Reject failed', { id: req.params.id, error: err.message })
+    logError('signals', 'Reject failed', { id: req.params.id, error: err.message })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.patch('/api/signals/:id/feedback', async (req, res) => {
+  try {
+    const { user_action } = req.body
+    if (!user_action) return res.status(400).json({ error: 'user_action is required' })
+    res.json(await recordFeedback(req.params.id, user_action))
+  } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
@@ -451,7 +580,7 @@ app.get('/tools/get_watchlist', async (req, res) => {
 app.post('/tools/save_recommendation', async (req, res) => {
   try {
     const { userId, ticker, signal, confidence, rationale, supporting_factors, risks } = req.body
-    if (!userId || !ticker || !signal) return res.status(400).json({ error: 'userId, ticker, and signal are required' })
+    if (!userId || !ticker || !signal) return res.status(400).json({ error: 'userId, ticker and signal are required' })
     const saved = await saveRecommendation({ userId, ticker, signal, confidence, rationale, supporting_factors, risks })
     res.json(saved)
   } catch (err) {
@@ -506,7 +635,7 @@ app.patch('/api/preferences', async (req, res) => {
 app.post('/api/trades', async (req, res) => {
   try {
     const { userId, ticker, action, quantity, entry_price, signal_id, rationale } = req.body
-    if (!userId || !ticker || !action) return res.status(400).json({ error: 'userId, ticker, and action are required' })
+    if (!userId || !ticker || !action) return res.status(400).json({ error: 'userId, ticker and action are required' })
     const trade = await createVirtualTrade({ userId, ticker, action, quantity, entry_price, signal_id, rationale })
     res.json(trade)
   } catch (err) {
@@ -739,7 +868,9 @@ app.post('/api/onboarding/complete', requireAuth, async (req, res) => {
       const wl = await createWatchlist({ userId, name: 'My Watchlist' })
       const tickers = typeof watchlist === 'string' ? watchlist.split(',').map(t => t.trim()).filter(Boolean) : watchlist
       for (const ticker of tickers) {
-        await addWatchlistItem({ watchlistId: wl._id, ticker, sector: sectorList[0] || null })
+        const meta = await getTickerMetadata(ticker)
+        const sector = resolveSector(ticker, meta.sector, null)
+        await addWatchlistItem({ watchlistId: wl._id, ticker, sector, name: meta.name })
       }
       watchlistResult = { id: wl._id, name: wl.name, tickers }
     }
@@ -758,6 +889,7 @@ app.get('/api/stocks/search', requireAuth, async (req, res) => {
     if (!q || q.length < 2) return res.json([])
     const apiKey = process.env.TWELVEDATA_API_KEY
     if (!apiKey) return res.status(503).json({ error: 'Stock search unavailable (no API key)' })
+    logApiUsage({ provider: 'twelvedata', endpoint: 'symbol_search', ticker: q, source: 'stock_search' })
     const url = `https://api.twelvedata.com/symbol_search?symbol=${encodeURIComponent(q)}&outputsize=10&apikey=${apiKey}`
     const resp = await fetch(url, { signal: AbortSignal.timeout(5000) })
     if (!resp.ok) return res.status(502).json({ error: 'Twelve Data API error' })
@@ -799,6 +931,7 @@ app.post('/agent/scan', async (req, res) => {
     info('agent', 'Manual scan complete', { userId, recommendations: result.recommendations?.length || 0 })
     res.json(result)
   } catch (err) {
+    if (err.code === 'SCAN_LOCKED') return res.status(429).json({ error: err.message })
     logError('agent', 'Scan failed', { error: err.message })
     res.status(500).json({ error: err.message })
   }
@@ -808,8 +941,26 @@ app.get('/api/activity', async (req, res) => {
   try {
     const { userId, limit } = req.query
     if (!userId) return res.status(400).json({ error: 'userId is required' })
-    const notifications = await getNotifications(userId, { limit: limit ? Number(limit) : 20 })
-    res.json(notifications)
+    const cap = limit ? Number(limit) * 3 : 60
+    const notifications = await getNotifications(userId, { limit: cap })
+    const meaningful = notifications.filter(n => {
+      if (n.type === 'scan_complete') return false
+      if (n.type === 'recommendation') {
+        const t = (n.title || '').toUpperCase()
+        return t.startsWith('BUY ') || t.startsWith('EXIT ') || t.startsWith('SELL ')
+      }
+      return ['trade_executed', 'auto_executed', 'rebalancing'].includes(n.type)
+    })
+    res.json(meaningful.slice(0, limit ? Number(limit) : 20))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/debug/api-usage', async (req, res) => {
+  try {
+    const hours = req.query.hours ? Number(req.query.hours) : 24
+    res.json(await getApiUsageSummary(hours))
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -819,31 +970,37 @@ app.get('/api/dashboard/metrics', async (req, res) => {
   try {
     const { userId } = req.query
     if (!userId) return res.status(400).json({ error: 'userId is required' })
-    const [cash, stats, pendingCount, prefs, latestRec] = await Promise.all([
-      getVirtualCash(userId),
+    const recCol = getCollection('recommendation_log')
+    const [summary, stats, pendingCount, prefs, latestRec, pendingRecs, blockedRecs] = await Promise.all([
+      getPortfolioSummary(userId),
       getTradeStats(userId),
       getRecommendationsByStatus(userId, 'generated', 999).then(r => r.length),
       getPreferences(userId),
       getRecommendationsByStatus(userId, null, 1).then(r => r[0] || null),
+      recCol ? recCol.find({ userId, status: 'generated' }).toArray() : [],
+      recCol ? recCol.find({ userId, status: 'blocked' }).toArray() : [],
     ])
+    const awaiting_execution = pendingRecs.filter(r => r.signal === 'BUY' || r.signal === 'EXIT').length
+    const monitoring = pendingRecs.length - awaiting_execution
 
-    const marked = await markToMarket(userId)
-    const positions = marked.positions
-    const equity = marked.totalEquity
-    const costBasis = positions.reduce((s, p) => s + Number(p.average_price) * Number(p.quantity), 0)
-    const unrealized_pnl = Number((marked.positionsValue - costBasis).toFixed(2))
     res.json({
-      virtual_cash: cash.virtual_cash,
-      starting_capital: cash.starting_capital,
-      equity: Number(equity.toFixed(2)),
-      portfolio_return_pct: Number(((equity - cash.starting_capital) / cash.starting_capital * 100).toFixed(2)),
+      virtual_cash: summary.virtual_cash,
+      positions_value: summary.positions_value,
+      starting_capital: stats.starting_capital,
+      equity: summary.total_equity,
+      portfolio_return_pct: summary.portfolio_return_pct,
       realized_pnl: stats.total_pnl,
-      unrealized_pnl,
-      open_positions: positions.length,
+      unrealized_pnl: summary.unrealized_pnl,
+      open_positions: summary.position_count,
       open_trades: stats.open_trades,
       win_rate: stats.win_rate,
       total_trades: stats.total_trades,
       pending_actions: pendingCount,
+      recommendation_queue: {
+        awaiting_execution,
+        monitoring,
+        blocked: blockedRecs.length,
+      },
       mode: prefs?.mode || 'agentic',
       next_scan: getNextScanTime(prefs?.signal_frequency || 'daily').toISOString(),
       latest_recommendation: latestRec ? { ticker: latestRec.ticker, signal: latestRec.signal, confidence: latestRec.confidence, confidence_delta: latestRec.confidence_delta, created_at: latestRec.created_at } : null,
@@ -1012,18 +1169,33 @@ app.get('/api/agent/status', async (req, res) => {
     }).toArray() || []
 
     const pendingRecs = await getCollection('recommendation_log')?.find({ userId, status: 'generated' }).toArray() || []
+    const blockedRecs = await getCollection('recommendation_log')?.find({ userId, status: 'blocked' }).toArray() || []
+    const awaiting_execution = pendingRecs.filter(r => r.signal === 'BUY' || r.signal === 'EXIT').length
+    const monitoring = pendingRecs.length - awaiting_execution
+    const outcomes_24h = {
+      executed: recentRecs.filter(r => r.status === 'executed').length,
+      blocked: recentRecs.filter(r => r.status === 'blocked').length,
+      monitoring: recentRecs.filter(r => r.status === 'generated' && r.signal !== 'BUY' && r.signal !== 'EXIT').length,
+      awaiting_execution: recentRecs.filter(r => r.status === 'generated' && (r.signal === 'BUY' || r.signal === 'EXIT')).length,
+    }
 
     const positions = await getCollection('portfolio_positions')?.find({ userId }).toArray() || []
+    const scanTickers = await getScanTickers(userId)
+    const market_data = await getMarketDataFreshness(scanTickers)
 
     res.json({
       mode: prefs?.mode || 'agentic',
       enabled: prefs?.enabled !== false,
       scan_in_progress: user?.scan_in_progress || false,
+      market_data,
       last_scan: lastScan ? {
         completed_at: lastScan.completed_at,
         auto_executed: lastScan.auto_executed,
         mode: lastScan.mode,
         duration_ms: lastScan.duration_ms || null,
+        tickers_scanned: lastScan.tickers_scanned ?? null,
+        recommendations: lastScan.recommendations ?? lastScan.recommendations_generated ?? null,
+        executed: lastScan.executed ?? lastScan.auto_executed ?? null,
       } : null,
       last_24h: {
         recommendations: recentRecs.length,
@@ -1031,8 +1203,14 @@ app.get('/api/agent/status', async (req, res) => {
         trades_executed: recentTrades.length,
         buys: recentTrades.filter(t => t.action === 'BUY').length,
         sells: recentTrades.filter(t => t.action === 'SELL').length,
+        outcomes: outcomes_24h,
       },
       pending_recommendations: pendingRecs.length,
+      recommendation_queue: {
+        awaiting_execution,
+        monitoring,
+        blocked: blockedRecs.length,
+      },
       portfolio: {
         positions: positions.length,
         max_stocks: prefs?.max_stocks || 15,
@@ -1065,7 +1243,7 @@ async function start() {
     startWebSocket()
     info('startup', 'WebSocket started')
   } else {
-    warn('startup', 'TWELVEDATA_API_KEY not set — WebSocket disabled')
+    warn('startup', 'TWELVEDATA_API_KEY not set - WebSocket disabled')
   }
   initPush()
   startScheduler()

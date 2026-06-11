@@ -2,36 +2,31 @@
 
 import { useEffect, useState } from "react"
 import { motion } from "framer-motion"
-import { Activity, Bell, Radio, Zap } from "lucide-react"
+import { Activity, Bell, Zap, Scale } from "lucide-react"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/hooks/useAuth"
-import { useSSEPrices, fetchActivity } from "@/lib/api"
+import { fetchActivity } from "@/lib/api"
 import { formatTimeAgo } from "@/lib/format"
 
-const iconMap = { recommendation: Radio, trade_executed: Zap, auto_executed: Zap, scan_complete: Activity, info: Bell }
-const colorMap = { recommendation: 'text-emerald-300', trade_executed: 'text-blue-300', auto_executed: 'text-purple-300', scan_complete: 'text-amber-300' }
+const iconMap = { recommendation: Zap, trade_executed: Zap, auto_executed: Zap, rebalancing: Scale, info: Bell }
+const colorMap = { recommendation: 'text-emerald-300', trade_executed: 'text-blue-300', auto_executed: 'text-purple-300', rebalancing: 'text-amber-300' }
 
 export function ActivityFeed() {
   const { userId } = useAuth()
   const [items, setItems] = useState([])
-  const [priceEvents, setPriceEvents] = useState([])
 
   useEffect(() => {
     if (!userId) return
     fetchActivity(userId, 15).then(d => { if (Array.isArray(d)) setItems(d) }).catch(() => {})
   }, [userId])
 
-  useSSEPrices((data) => {
-    setPriceEvents(prev => [{ id: `p_${Date.now()}`, type: 'price', title: `${data.ticker} → $${Number(data.price).toFixed(2)}`, created_at: data.updated_at }, ...prev].slice(0, 5))
-  })
-
-  const all = [...priceEvents, ...items].slice(0, 20)
+  const all = items.slice(0, 20)
 
   if (!all.length) {
     return (
       <div className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
-        No activity yet. Run a scan or wait for live price updates.
+        No meaningful activity yet. Trades and executions will appear here.
       </div>
     )
   }
@@ -49,7 +44,12 @@ export function ActivityFeed() {
                 <Icon className={`size-3.5 ${color}`} />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-xs leading-snug">{item.title}</p>
+                <p className="text-xs leading-snug break-words">{item.title}</p>
+                {item.message ? (
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground break-words" title={item.message}>
+                    {item.message}
+                  </p>
+                ) : null}
                 <p className="mt-0.5 text-[10px] text-muted-foreground">{formatTimeAgo(item.created_at)}</p>
               </div>
               {item.type && item.type !== 'price' && (

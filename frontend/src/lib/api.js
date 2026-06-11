@@ -22,6 +22,15 @@ export function fetchMe(token) {
   return apiFetch('/auth/me', { headers: { Authorization: `Bearer ${token}` } })
 }
 
+export function updateProfile(name) {
+  const token = getToken()
+  return apiFetch('/auth/me', {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+}
+
 export function getToken() {
   if (typeof window === 'undefined') return null
   return localStorage.getItem('stocksense_token')
@@ -46,6 +55,10 @@ export function fetchPortfolio(userId) {
   return apiFetch(`/api/portfolio?userId=${encodeURIComponent(userId)}`)
 }
 
+export function fetchPortfolioSummary(userId) {
+  return apiFetch(`/api/portfolio/summary?userId=${encodeURIComponent(userId)}`)
+}
+
 export function fetchSectorAllocation(userId) {
   return apiFetch(`/api/portfolio/sectors?userId=${encodeURIComponent(userId)}`)
 }
@@ -64,12 +77,42 @@ export function fetchWatchlistItems(watchlistId, userId) {
   return apiFetch(`/api/watchlists/${encodeURIComponent(watchlistId)}/items${q}`)
 }
 
-export function fetchSignals(userId, { limit = 50, signal = null, since = null } = {}) {
+export function fetchManagedWatchlist(userId) {
+  return apiFetch(`/api/watchlists/managed?userId=${encodeURIComponent(userId)}`)
+}
+
+export function addManagedWatchlistItem(userId, { ticker, name, sector }) {
+  return apiFetch('/api/watchlists/managed/items', {
+    method: 'POST',
+    body: JSON.stringify({ userId, ticker, name, sector }),
+  })
+}
+
+export function removeManagedWatchlistItem(userId, ticker) {
+  return apiFetch(`/api/watchlists/managed/items/${encodeURIComponent(ticker)}?userId=${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function fetchSignals(userId, { limit = 50, signal = null, since = null, status = null } = {}) {
   const params = new URLSearchParams({ userId })
   if (limit) params.set('limit', String(limit))
   if (signal) params.set('signal', signal)
   if (since) params.set('since', since)
+  if (status) params.set('status', status)
   return apiFetch(`/api/signals?${params}`)
+}
+
+export function fetchSignalsPending(userId, limit = 50) {
+  return apiFetch(`/api/signals/pending?userId=${encodeURIComponent(userId)}&limit=${limit}`)
+}
+
+export function fetchSignalsCompleted(userId, limit = 50) {
+  return apiFetch(`/api/signals/completed?userId=${encodeURIComponent(userId)}&limit=${limit}`)
+}
+
+export function fetchSignalHistory(userId, limit = 100) {
+  return apiFetch(`/api/signals/history?userId=${encodeURIComponent(userId)}&limit=${limit}`)
 }
 
 export function patchSignalFeedback(id, user_action) {
@@ -82,6 +125,14 @@ export function fetchLatestPrice(ticker) {
 
 export function fetchDashboardMetrics(userId) {
   return apiFetch(`/api/dashboard/metrics?userId=${encodeURIComponent(userId)}`)
+}
+
+export function fetchTrades(userId, { status = null, ticker = null, limit = 50 } = {}) {
+  const params = new URLSearchParams({ userId })
+  if (status) params.set('status', status)
+  if (ticker) params.set('ticker', ticker)
+  if (limit) params.set('limit', String(limit))
+  return apiFetch(`/api/trades?${params}`)
 }
 
 export function fetchActivity(userId, limit = 15) {
@@ -124,20 +175,12 @@ export function updatePreferences(userId, updates) {
   return apiFetch('/api/preferences', { method: 'PATCH', body: JSON.stringify({ userId, ...updates }) })
 }
 
-export function fetchActionsPending(userId) {
-  return apiFetch(`/api/actions/pending?userId=${encodeURIComponent(userId)}`)
+export function approveSignal(id) {
+  return apiFetch(`/api/signals/${encodeURIComponent(id)}/approve`, { method: 'POST' })
 }
 
-export function fetchActionsCompleted(userId) {
-  return apiFetch(`/api/actions/completed?userId=${encodeURIComponent(userId)}`)
-}
-
-export function approveAction(id) {
-  return apiFetch(`/api/actions/${encodeURIComponent(id)}/approve`, { method: 'POST' })
-}
-
-export function rejectAction(id) {
-  return apiFetch(`/api/actions/${encodeURIComponent(id)}/reject`, { method: 'POST' })
+export function rejectSignal(id) {
+  return apiFetch(`/api/signals/${encodeURIComponent(id)}/reject`, { method: 'POST' })
 }
 
 export function agentChat(userId, message) {

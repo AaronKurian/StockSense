@@ -47,7 +47,7 @@ export function TopNavbar() {
         </Sheet>
 
         <div className="hidden min-w-0 flex-1 items-center gap-2 md:flex">
-          <div className="relative max-w-md flex-1">
+          {/* <div className="relative max-w-md flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               readOnly
@@ -55,20 +55,10 @@ export function TopNavbar() {
               placeholder="Search tickers, signals, history…"
               className="h-10 rounded-md border-white/10 bg-white/5 pl-10"
             />
-          </div>
+          </div> */}
         </div>
 
         <div className="flex flex-1 items-center justify-end gap-2 md:flex-none">
-          <motion.div
-            layout
-            className="hidden items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs md:flex"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
-            <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-muted-foreground">SSE live</span>
-          </motion.div>
-
           <Button asChild size="sm" className="hidden rounded-md bg-gradient-to-r from-emerald-500 to-blue-500 text-primary-foreground shadow-lg shadow-emerald-500/20 md:inline-flex">
             <Link href="/agent">
               <Sparkles className="mr-1.5 size-4" />

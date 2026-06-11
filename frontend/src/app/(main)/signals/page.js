@@ -1,81 +1,94 @@
 "use client"
 import { useAuth } from "@/hooks/useAuth"
 
-import { useEffect, useMemo, useState } from "react"
-import { motion } from "framer-motion"
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Radio, Search, SlidersHorizontal } from "lucide-react"
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { SignalCard } from "@/components/signals/SignalCard"
+import { SignalTimeline } from "@/components/signals/SignalTimeline"
 import { EmptyState } from "@/components/common/EmptyState"
-import { fetchSignals, patchSignalFeedback } from "@/lib/api"
-import { emitSignalsChanged, onSignalsChanged, onActionsChanged } from "@/lib/events"
+import { fetchSignals, fetchPreferences, approveSignal, rejectSignal } from "@/lib/api"
+import { emitSignalsChanged, emitActionsChanged, onSignalsChanged, onActionsChanged } from "@/lib/events"
+import { toSignalFromRec } from "@/lib/recommendationStatus"
 
-function toSignalShape(rec) {
-  return {
-    id:               rec._id?.toString() ?? rec.ticker,
-    ticker:           rec.ticker,
-    name:             rec.ticker,
-    type:             rec.signal,
-    confidence:       Math.round((rec.confidence ?? 0) * 100),
-    urgency:          'medium',
-    headline:         rec.rationale?.slice(0, 120) ?? '',
-    rationale:        rec.rationale ?? '',
-    supportingFactors: rec.supporting_factors ?? [],
-    risks:            rec.risks ?? [],
-    indicators:       [],
-    createdAt:        rec.created_at ?? new Date().toISOString(),
-    user_action:      rec.user_action ?? null,
-  }
-}
-
-export default function SignalCenterPage() {
+function SignalCenterPageContent() {
   useEffect(() => { document.title = "Signals - StockSense" }, [])
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const highlightRecId = searchParams.get("recId")
+  const highlightTicker = searchParams.get("ticker")
   const { userId } = useAuth()
-  const [signals, setSignals]   = useState([])
-  const [loading, setLoading]   = useState(true)
-  const [q, setQ]               = useState("")
-  const [minConf, setMinConf]   = useState([0])
+  const [signals, setSignals] = useState([])
+  const [mode, setMode] = useState("manual")
+  const [loading, setLoading] = useState(true)
+  const [q, setQ] = useState(highlightTicker ?? "")
+  const [minConf, setMinConf] = useState([10])
+  const highlightRef = useRef(null)
 
   useEffect(() => {
-    if (!userId) return
-    fetchSignals(userId, { limit: 100 })
-      .then(recs => setSignals(recs.map(toSignalShape)))
+    if (highlightRecId) {
+      router.replace(`/signals/${highlightRecId}`)
+    }
+  }, [highlightRecId, router])
+
+  const loadSignals = useCallback(() => {
+    if (!userId) return Promise.resolve()
+    return fetchSignals(userId, { limit: 100 })
+      .then(recs => {
+        const latestByTicker = new Map()
+        for (const r of recs) {
+          const prev = latestByTicker.get(r.ticker)
+          if (!prev || new Date(r.created_at) > new Date(prev.created_at)) latestByTicker.set(r.ticker, r)
+        }
+        setSignals([...latestByTicker.values()].map(r => toSignalFromRec(r, { mode })))
+      })
       .catch(err => {
         console.error(err)
         toast.error('Could not load signals', { description: err.message })
       })
-      .finally(() => setLoading(false))
+  }, [userId, mode])
+
+  useEffect(() => {
+    if (!userId) return
+    fetchPreferences(userId)
+      .then(p => setMode(p?.mode === 'agentic' ? 'agentic' : 'manual'))
+      .catch(() => {})
   }, [userId])
 
   useEffect(() => {
     if (!userId) return
-    const reload = () => {
-      fetchSignals(userId, { limit: 100 })
-        .then(recs => setSignals(recs.map(toSignalShape)))
-        .catch(() => {})
-    }
+    setLoading(true)
+    loadSignals().finally(() => setLoading(false))
+  }, [userId, loadSignals])
+
+  useEffect(() => {
+    if (!userId) return
+    const reload = () => { loadSignals().catch(() => {}) }
     const unsub1 = onSignalsChanged(reload)
     const unsub2 = onActionsChanged(reload)
     return () => { unsub1(); unsub2() }
-  }, [userId])
+  }, [userId, loadSignals])
 
-  const handleAction = async (action, signal) => {
-    const map = { Confirm: 'confirmed', Ignore: 'ignored', Snooze: 'snoozed' }
-    const user_action = map[action]
-    if (!user_action) return
-    setSignals(prev => prev.map(s => s.id === signal.id ? { ...s, user_action } : s))
-    try {
-      await patchSignalFeedback(signal.id, user_action)
-      emitSignalsChanged()
-    } catch (err) {
-      console.error('feedback patch failed:', err.message)
-    }
+  const handleApprove = async (signal) => {
+    await approveSignal(signal.id)
+    toast.success('Trade approved', { description: `${signal.type} ${signal.ticker} executed.` })
+    emitSignalsChanged()
+    emitActionsChanged()
+    await loadSignals()
+  }
+
+  const handleReject = async (signal) => {
+    await rejectSignal(signal.id)
+    toast.success('Recommendation rejected', { description: `${signal.type} ${signal.ticker} dismissed.` })
+    emitSignalsChanged()
+    emitActionsChanged()
+    await loadSignals()
   }
 
   const filtered = useMemo(() => {
@@ -86,12 +99,24 @@ export default function SignalCenterPage() {
     })
   }, [signals, q, minConf])
 
+  const highlightId = highlightRecId || (highlightTicker
+    ? filtered.find(s => s.ticker?.toUpperCase() === highlightTicker.toUpperCase())?.id
+    : null)
+
+  useEffect(() => {
+    if (!highlightId || loading) return
+    const t = setTimeout(() => highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 150)
+    return () => clearTimeout(t)
+  }, [highlightId, loading, filtered.length])
+
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Signal center</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Signals</h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Every recommendation from the AI pipeline - confidence, rationale, supporting factors, and risks.
+          {mode === 'agentic'
+            ? 'AI portfolio operations - decisions are executed automatically and recorded here.'
+            : 'AI recommendations awaiting your approval - approve to execute or reject to dismiss.'}
         </p>
       </div>
 
@@ -113,15 +138,21 @@ export default function SignalCenterPage() {
               <SlidersHorizontal className="size-3.5" />
               Minimum confidence: <span className="font-mono text-foreground">{minConf[0]}%</span>
             </div>
-            <Slider value={minConf} min={0} max={95} step={1} onValueChange={setMinConf} />
+            <Slider
+              value={minConf}
+              min={0}
+              max={95}
+              step={1}
+              onValueChange={(v) => setMinConf([typeof v === 'number' ? v : v[0] ?? 0])}
+            />
           </div>
         </CardContent>
       </Card>
 
       <Tabs defaultValue="cards" className="space-y-4">
         <TabsList className="rounded-md border border-white/10 bg-black/30">
-          <TabsTrigger value="cards" className="rounded-lg data-[state=active]:bg-emerald-500/20">Cards</TabsTrigger>
-          <TabsTrigger value="timeline" className="rounded-lg data-[state=active]:bg-emerald-500/20">Timeline</TabsTrigger>
+          <TabsTrigger value="cards" className="rounded-sm cursor-pointer data-[state=active]:bg-emerald-500/20">Cards</TabsTrigger>
+          <TabsTrigger value="timeline" className="rounded-sm cursor-pointer data-[state=active]:bg-emerald-500/20">Timeline</TabsTrigger>
         </TabsList>
 
         <TabsContent value="cards" className="space-y-4">
@@ -137,48 +168,54 @@ export default function SignalCenterPage() {
             />
           ) : (
             filtered.map(s => (
-              <SignalCard key={s.id} signal={s} onAction={handleAction} />
+              <div
+                key={s.id}
+                ref={s.id === highlightId ? highlightRef : undefined}
+                className={s.id === highlightId ? "rounded-2xl ring-2 ring-emerald-500/40 ring-offset-2 ring-offset-background" : undefined}
+              >
+                <SignalCard
+                  signal={s}
+                  mode={mode}
+                  onApprove={handleApprove}
+                  onReject={handleReject}
+                />
+              </div>
             ))
           )}
         </TabsContent>
 
-        <TabsContent value="timeline">
-          <Card className="rounded-2xl border-white/10 bg-white/[0.03]">
-            <CardContent className="space-y-4 p-5">
-              {loading
-                ? [...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 rounded-md bg-white/5" />)
-                : filtered.map((s, i) => (
-                  <motion.div
-                    key={s.id}
-                    initial={{ opacity: 0, x: -6 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.04 }}
-                    className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 py-3 last:border-0"
-                  >
-                    <div>
-                      <p className="text-xs text-muted-foreground">
-                        {new Date(s.createdAt).toLocaleString()}
-                      </p>
-                      <p className="text-sm font-semibold">
-                        {s.type} {s.ticker}{' '}
-                        <span className="font-normal text-muted-foreground">· {s.confidence}%</span>
-                      </p>
-                      <p className="mt-1 text-sm text-muted-foreground">{s.headline}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {s.user_action && (
-                        <Badge variant="outline" className="capitalize border-white/15 text-[10px]">
-                          {s.user_action}
-                        </Badge>
-                      )}
-                    </div>
-                  </motion.div>
-                ))
-              }
-            </CardContent>
-          </Card>
+        <TabsContent value="timeline" className="pt-2">
+          {loading ? (
+            <div className="space-y-6 pl-5">
+              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-28 rounded-xl bg-white/5" />)}
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={Radio}
+              title="No signals match filters"
+              description="Lower the confidence threshold or clear the search."
+              actionLabel="Clear filters"
+              actionHref="/signals"
+            />
+          ) : (
+            <SignalTimeline signals={filtered} />
+          )}
         </TabsContent>
       </Tabs>
     </div>
+  )
+}
+
+export default function SignalCenterPage() {
+  return (
+    <Suspense fallback={
+      <div className="space-y-8">
+        <Skeleton className="h-10 w-48 bg-white/5" />
+        <Skeleton className="h-32 rounded-2xl bg-white/5" />
+        {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-48 rounded-2xl bg-white/5" />)}
+      </div>
+    }>
+      <SignalCenterPageContent />
+    </Suspense>
   )
 }

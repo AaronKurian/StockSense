@@ -70,12 +70,12 @@ export function AgentChatPage() {
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Agent chat</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Ask StockSense to analyze stocks, review your portfolio, or generate recommendations.
+          Ask StockSense to analyze stocks, review your portfolio or generate recommendations.
         </p>
       </div>
 
-      <Card className="flex min-h-[560px] flex-col rounded-2xl border-white/10 bg-white/[0.03]">
-        <CardContent className="flex flex-1 flex-col gap-4 p-4">
+      <Card className="flex min-h-[calc(100vh-265px)] flex-col rounded-2xl border-white/10 bg-white/[0.03]">
+        <CardContent className="flex flex-1 flex-col gap-4 p-">
           {messages.length === 0 && (
             <div className="flex flex-wrap gap-2">
               {SUGGESTED_PROMPTS.map(p => (
@@ -128,7 +128,7 @@ export function AgentChatPage() {
             <Textarea
               value={input}
               onChange={e => setInput(e.target.value)}
-              placeholder="Ask about a stock, your portfolio, or request an analysis…"
+              placeholder="Ask about a stock, your portfolio or request an analysis…"
               aria-label="Agent chat input"
               className="min-h-[52px] flex-1 resize-none rounded-md border-white/10 bg-black/30"
               onKeyDown={e => {
@@ -136,9 +136,9 @@ export function AgentChatPage() {
               }}
               disabled={loading}
             />
-            <Button className="rounded-md" onClick={() => send()} disabled={loading}>
-              <Send className="size-4" />
-            </Button>
+            <button className="rounded-md cursor-pointer p-2 px-3 bg-emerald-500/20 text-emerald-200" onClick={() => send()} disabled={loading}>
+              <Send className="size-8" />
+            </button>
           </div>
         </CardContent>
       </Card>

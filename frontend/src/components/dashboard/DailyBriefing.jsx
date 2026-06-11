@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Sparkles, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { formatDeltaUsd, formatPct } from "@/lib/format"
 
 export function DailyBriefing() {
   const { userId } = useAuth()
@@ -36,7 +37,7 @@ export function DailyBriefing() {
           </div>
           <Badge variant="outline" className={cn("text-xs", isPositive ? "border-emerald-500/30 text-emerald-200" : "border-rose-500/30 text-rose-200")}>
             {isPositive ? <ArrowUpRight className="size-3 mr-0.5" /> : <ArrowDownRight className="size-3 mr-0.5" />}
-            {isPositive ? "+" : ""}{briefing.daily_change_pct.toFixed(2)}%
+            {formatPct(briefing.daily_change_pct)}
           </Badge>
         </div>
 
@@ -45,13 +46,13 @@ export function DailyBriefing() {
             <p className="text-xs text-muted-foreground">Portfolio Value</p>
             <p className="font-mono text-lg font-semibold">${briefing.portfolio_value.toLocaleString()}</p>
             <p className={cn("text-xs font-mono", isPositive ? "text-emerald-300" : "text-rose-300")}>
-              {isPositive ? "+" : ""}${briefing.daily_change.toFixed(0)} today
+              {formatDeltaUsd(briefing.daily_change)} today
             </p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Total Return</p>
             <p className={cn("font-mono text-lg font-semibold", briefing.total_return_pct >= 0 ? "text-emerald-300" : "text-rose-300")}>
-              {briefing.total_return_pct >= 0 ? "+" : ""}{briefing.total_return_pct}%
+              {formatPct(briefing.total_return_pct)}
             </p>
             <p className="text-xs text-muted-foreground">{briefing.positions} positions held</p>
           </div>

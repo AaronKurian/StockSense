@@ -1,19 +1,23 @@
 
 import { getCollection } from '../config/db.js'
-import { info, warn } from '../lib/logger.js'
-import { fetchQuote } from './twelvedata.js'
+import { info } from '../lib/logger.js'
+import { resolveLatestPrice } from './prices.js'
 
-export async function savePortfolioSnapshot(userId) {
+function truncateToHour(d = new Date()) {
+  const bucket = new Date(d)
+  bucket.setMinutes(0, 0, 0)
+  return bucket
+}
+
+async function computeEquityMetrics(userId) {
   const userCol = getCollection('users')
   const posCol = getCollection('portfolio_positions')
-  const snapCol = getCollection('portfolio_snapshots')
-  if (!userCol || !posCol || !snapCol) return null
+  if (!userCol || !posCol) return null
 
   const user = await userCol.findOne({ _id: userId })
   if (!user) return null
 
   const positions = await posCol.find({ userId }).toArray()
-
   const latestCol = getCollection('latest_prices')
   let positionValue = 0
   for (const p of positions) {
@@ -27,6 +31,49 @@ export async function savePortfolioSnapshot(userId) {
 
   const cash = user.virtual_cash || 0
   const equity = cash + positionValue
+  return {
+    cash,
+    equity,
+    positionValue,
+    positionCount: positions.length,
+    startingCapital: user.starting_capital ?? 100000,
+    createdAt: user.created_at,
+  }
+}
+
+export async function saveEquitySnapshot(userId) {
+  const metrics = await computeEquityMetrics(userId)
+  if (!metrics) return null
+
+  const { cash, equity, positionValue, positionCount } = metrics
+  const bucket = truncateToHour()
+  const hourCol = getCollection('portfolio_equity_history')
+  if (!hourCol) return null
+
+  const doc = {
+    userId,
+    bucket,
+    portfolio_value: Number(equity.toFixed(2)),
+    cash: Number(cash.toFixed(2)),
+    positions_value: Number(positionValue.toFixed(2)),
+    position_count: positionCount,
+    granularity: 'hourly',
+    updated_at: new Date(),
+  }
+
+  await hourCol.updateOne({ userId, bucket }, { $set: doc, $setOnInsert: { created_at: new Date() } }, { upsert: true })
+  return doc
+}
+
+export async function savePortfolioSnapshot(userId) {
+  const metrics = await computeEquityMetrics(userId)
+  if (!metrics) return null
+
+  const { cash, equity, positionValue, positionCount } = metrics
+  await saveEquitySnapshot(userId).catch(() => {})
+
+  const snapCol = getCollection('portfolio_snapshots')
+  if (!snapCol) return null
 
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -37,8 +84,9 @@ export async function savePortfolioSnapshot(userId) {
     portfolio_value: Number(equity.toFixed(2)),
     cash: Number(cash.toFixed(2)),
     positions_value: Number(positionValue.toFixed(2)),
-    position_count: positions.length,
+    position_count: positionCount,
     integrity_check: Math.abs(equity - (cash + positionValue)) < 0.01,
+    granularity: 'daily',
     created_at: new Date(),
   }
 
@@ -50,12 +98,87 @@ export async function savePortfolioSnapshot(userId) {
   return doc
 }
 
+function withSyntheticBaseline(snaps, user) {
+  if (!user || !snaps.length) return snaps
+  const startCap = user.starting_capital ?? 100000
+  const startDate = new Date(user.created_at || Date.now() - 7 * 86400000)
+  startDate.setMinutes(0, 0, 0)
+  const hasBaseline = snaps.some(s =>
+    s.synthetic || (Number(s.position_count) === 0 && Math.abs(Number(s.portfolio_value) - startCap) < 1)
+  )
+  if (hasBaseline) return snaps
+  return [{
+    userId: user._id,
+    date: startDate,
+    portfolio_value: startCap,
+    cash: startCap,
+    positions_value: 0,
+    position_count: 0,
+    granularity: 'hourly',
+    synthetic: true,
+  }, ...snaps.filter(s => !s.synthetic)]
+}
+
 export async function getPortfolioSnapshots(userId, days = 30) {
-  const col = getCollection('portfolio_snapshots')
-  if (!col) return []
-  const since = new Date()
-  since.setDate(since.getDate() - days)
-  return col.find({ userId, date: { $gte: since } }).sort({ date: 1 }).toArray()
+  try { await savePortfolioSnapshot(userId) } catch {}
+
+  const userCol = getCollection('users')
+  const user = userCol ? await userCol.findOne({ _id: userId }) : null
+  const hourCol = getCollection('portfolio_equity_history')
+  const dayCol = getCollection('portfolio_snapshots')
+  if (!hourCol || !dayCol) return []
+
+  const accountAgeDays = user?.created_at
+    ? (Date.now() - new Date(user.created_at).getTime()) / 86400000
+    : 7
+  const useHourly = days <= 7 || accountAgeDays <= 7
+
+  if (useHourly) {
+    const since = new Date(Date.now() - Math.min(days, 7) * 86400000)
+    const hourly = await hourCol.find({ userId, bucket: { $gte: since } }).sort({ bucket: 1 }).toArray()
+    const snaps = hourly.map(h => ({
+      userId: h.userId,
+      date: h.bucket,
+      portfolio_value: h.portfolio_value,
+      cash: h.cash,
+      positions_value: h.positions_value,
+      position_count: h.position_count,
+      granularity: 'hourly',
+    }))
+    return withSyntheticBaseline(snaps, user)
+  }
+
+  const hourlySince = new Date(Date.now() - 7 * 86400000)
+  const dailySince = new Date()
+  dailySince.setDate(dailySince.getDate() - days)
+
+  const [hourly, daily] = await Promise.all([
+    hourCol.find({ userId, bucket: { $gte: hourlySince } }).sort({ bucket: 1 }).toArray(),
+    dayCol.find({ userId, date: { $gte: dailySince, $lt: hourlySince } }).sort({ date: 1 }).toArray(),
+  ])
+
+  const snaps = [
+    ...daily.map(d => ({
+      userId: d.userId,
+      date: d.date,
+      portfolio_value: d.portfolio_value,
+      cash: d.cash,
+      positions_value: d.positions_value,
+      position_count: d.position_count,
+      granularity: 'daily',
+    })),
+    ...hourly.map(h => ({
+      userId: h.userId,
+      date: h.bucket,
+      portfolio_value: h.portfolio_value,
+      cash: h.cash,
+      positions_value: h.positions_value,
+      position_count: h.position_count,
+      granularity: 'hourly',
+    })),
+  ].sort((a, b) => new Date(a.date) - new Date(b.date))
+
+  return withSyntheticBaseline(snaps, user)
 }
 
 export async function evaluateRecommendationOutcomes() {
@@ -85,9 +208,9 @@ export async function evaluateRecommendationOutcomes() {
         if (cached?.price) currentPrice = cached.price
       }
       if (!currentPrice) {
-        const quote = await fetchQuote(rec.ticker)
-        if (!quote?.price) continue
-        currentPrice = quote.price
+        const resolved = await resolveLatestPrice(rec.ticker, { source: 'learning_outcome' })
+        if (!resolved.ok) continue
+        currentPrice = resolved.price
       }
 
       const tradeCol = getCollection('virtual_trades')
@@ -142,9 +265,9 @@ export async function evaluateRecommendationOutcomes() {
         if (cached?.price) currentPrice = cached.price
       }
       if (!currentPrice) {
-        const quote = await fetchQuote(rec.ticker)
-        if (!quote?.price) continue
-        currentPrice = quote.price
+        const resolved = await resolveLatestPrice(rec.ticker, { source: 'learning_outcome' })
+        if (!resolved.ok) continue
+        currentPrice = resolved.price
       }
 
       const tradeCol = getCollection('virtual_trades')
@@ -274,7 +397,15 @@ export async function generateDailyBriefing(userId) {
   const dailyChangePct = prevSnap && prevSnap.portfolio_value > 0 ? (dailyChange / prevSnap.portfolio_value) * 100 : 0
 
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-  const todaysTrades = tradeCol ? await tradeCol.find({ userId, created_at: { $gte: todayStart } }).toArray() : []
+  const rawTrades = tradeCol ? await tradeCol.find({ userId, created_at: { $gte: todayStart } }).sort({ created_at: 1 }).toArray() : []
+  const seen = new Set()
+  const todaysTrades = []
+  for (const t of rawTrades) {
+    const key = t.signal_id || `${t.action}:${t.ticker}:${t.quantity}:${t.entry_price}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    todaysTrades.push(t)
+  }
 
   const positionsWithPnl = positions.map(p => {
     const pnlPct = Number(p.average_price) > 0 ? 0 : 0
@@ -314,7 +445,7 @@ export async function runNightlyJobs() {
         await createNotification({
           userId: u.userId, type: 'scan_complete',
           title: `Daily: Portfolio ${sign}${briefing.daily_change_pct.toFixed(2)}% ($${briefing.portfolio_value.toLocaleString()})`,
-          message: briefing.todays_trades > 0 ? `${briefing.todays_trades} trade(s) today. ${briefing.trade_details?.slice(0, 2).join(', ') || ''}` : 'No trades today.',
+          message: briefing.todays_trades > 0 ? `${briefing.todays_trades} trade(s) today. ${briefing.trade_details?.join(', ') || ''}` : 'No trades today.',
         })
       }
     } catch {}
@@ -334,6 +465,13 @@ export async function runNightlyJobs() {
   if (scanCol) {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
     await scanCol.deleteMany({ completed_at: { $lt: thirtyDaysAgo } })
+  }
+
+  const hourCol = getCollection('portfolio_equity_history')
+  if (hourCol) {
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+    const pruned = await hourCol.deleteMany({ bucket: { $lt: ninetyDaysAgo } })
+    if (pruned.deletedCount > 0) info('learning', `Pruned ${pruned.deletedCount} hourly equity snapshot(s) older than 90d`)
   }
 
   info('learning', `Nightly jobs complete. Outcomes evaluated: ${evaluated}`)

@@ -1,9 +1,10 @@
 import cron from 'node-cron'
 import { getCollection } from '../config/db.js'
 import { runAgentForUser, expireStaleRecommendations, getScanTickers } from './agent.js'
-import { createNotification } from './notifications.js'
-import { runNightlyJobs } from './learning.js'
+import { createScanCompleteNotification } from './notifications.js'
+import { runNightlyJobs, saveEquitySnapshot } from './learning.js'
 import { runAutonomousExecution, acquireScanLock, releaseScanLock } from './autonomy.js'
+import { getPreferences } from './preferences.js'
 import { info, warn, error as logError } from '../lib/logger.js'
 
 let tasks = []
@@ -40,20 +41,31 @@ async function runScheduledScan() {
 
     const tickers = await getScanTickers(pref.userId)
     if (!tickers.length) {
+      const mode = pref.mode === 'manual' ? 'manual' : 'agentic'
+      if (mode === 'agentic') {
+        try {
+          await runAutonomousExecution(pref.userId, pref)
+        } catch (err) {
+          logError('scheduler', 'Autonomous execution failed (no tickers)', { userId: pref.userId, error: err.message })
+        }
+      }
       lastRunByUser.set(pref.userId, Date.now())
       continue
     }
 
     const lock = await acquireScanLock(pref.userId)
     if (!lock.acquired) {
-      info('scheduler', 'Skip user — scan already in progress', { userId: pref.userId, reason: lock.reason })
+      info('scheduler', 'Skip user - scan already in progress', { userId: pref.userId, reason: lock.reason })
       continue
     }
 
     try {
+      const scanStart = Date.now()
+      const tickersScanned = tickers.length
       const results = await runAgentForUser(pref.userId)
-      const saved = results.filter(r => r._id && !r.error)
+      const saved = results.filter(r => r._id && !r.error && !r._silent)
       const errors = results.filter(r => r.error)
+      const duration_ms = Date.now() - scanStart
 
       let autoExecuted = 0
 
@@ -67,19 +79,24 @@ async function runScheduledScan() {
         }
       }
 
+      await saveEquitySnapshot(pref.userId).catch(() => {})
+
       lastRunByUser.set(pref.userId, Date.now())
       scanned++
 
-      const execNote = autoExecuted > 0 ? ` · ${autoExecuted} auto-executed` : ''
-      await createNotification({
-        userId: pref.userId, type: 'scan_complete',
-        title: saved.length > 0 ? `Scan complete - ${saved.length} signal(s)${execNote}` : `Scan complete - no new opportunities${execNote}`,
-        message: saved.length > 0 ? saved.map(r => `${r.signal} ${r.ticker}`).join(', ') : 'All watchlist tickers reviewed',
+      await createScanCompleteNotification(pref.userId, {
+        title: 'Scan complete',
+        count: saved.length,
+        autoExecuted,
       })
 
       await getCollection('scan_history')?.updateOne(
         { userId: pref.userId, completed_at: { $gte: new Date(Date.now() - 60000) } },
-        { $set: { userId: pref.userId, completed_at: new Date(), mode, auto_executed: autoExecuted, recommendations_generated: saved.length, source: 'scheduler' } },
+        { $set: {
+          userId: pref.userId, completed_at: new Date(), mode, auto_executed: autoExecuted,
+          recommendations_generated: saved.length, tickers_scanned: tickersScanned,
+          recommendations: saved.length, executed: autoExecuted, duration_ms, source: 'scheduler',
+        }},
         { upsert: true }
       )
 
@@ -93,12 +110,21 @@ async function runScheduledScan() {
   if (scanned) info('scheduler', `Scheduled scan cycle done`, { usersScanned: scanned })
 }
 
+async function runHourlyEquitySnapshots() {
+  const col = getCollection('agent_preferences')
+  if (!col) return
+  const prefs = await col.find({ enabled: true }).toArray()
+  for (const pref of prefs) {
+    await saveEquitySnapshot(pref.userId).catch(() => {})
+  }
+}
+
 export function startScheduler() {
   if (tasks.length) return
   tasks.push(cron.schedule('*/5 * * * *', runScheduledScan))
-
+  tasks.push(cron.schedule('0 * * * *', runHourlyEquitySnapshots))
   tasks.push(cron.schedule('0 0 * * *', runNightlyJobs))
-  info('scheduler', 'Started - scans every 5min, nightly jobs at midnight')
+  info('scheduler', 'Started - scans every 5min, hourly equity snapshots, nightly jobs at midnight')
 }
 
 export function stopScheduler() {
@@ -114,21 +140,64 @@ export function getNextScanTime(frequency) {
 export async function triggerManualScan(userId) {
   info('scheduler', 'Manual scan triggered', { userId })
 
-  await expireStaleRecommendations()
-  const results = await runAgentForUser(userId)
-  const saved = results.filter(r => r._id && !r.error)
-  const errors = results.filter(r => r.error)
-  lastRunByUser.set(userId, Date.now())
-
-  await createNotification({
-    userId, type: 'scan_complete',
-    title: saved.length > 0 ? `Manual scan - ${saved.length} signal(s)` : 'Scan complete - no new opportunities',
-    message: saved.length > 0 ? saved.map(r => `${r.signal} ${r.ticker}`).join(', ') : errors.length > 0 ? `${errors.length} ticker(s) could not be analyzed` : 'All watchlist tickers reviewed',
-  })
-
-  if (errors.length > 0) {
-    warn('scheduler', `${errors.length} ticker(s) failed during scan`, { userId, errors: errors.slice(0, 3).map(e => `${e.ticker}: ${e.error}`) })
+  const lock = await acquireScanLock(userId)
+  if (!lock.acquired) {
+    if (lock.reason === 'not_found') throw new Error('User not found')
+    if (lock.reason === 'locked') {
+      const err = new Error('Scan already in progress')
+      err.code = 'SCAN_LOCKED'
+      throw err
+    }
+    throw new Error('Could not acquire scan lock')
   }
-  info('scheduler', 'Manual scan complete', { userId, signals: saved.length, errors: errors.length })
-  return { signals_generated: saved.length, errors: errors.length, results }
+
+  try {
+    await expireStaleRecommendations()
+    const scanStart = Date.now()
+    const tickersScanned = (await getScanTickers(userId)).length
+    const results = await runAgentForUser(userId)
+    const saved = results.filter(r => r._id && !r.error && !r._silent)
+    const errors = results.filter(r => r.error)
+    const duration_ms = Date.now() - scanStart
+    lastRunByUser.set(userId, Date.now())
+
+    const prefs = await getPreferences(userId)
+    const mode = prefs?.mode === 'manual' ? 'manual' : 'agentic'
+    let autoExecuted = 0
+
+    if (mode === 'agentic') {
+      try {
+        const exec = await runAutonomousExecution(userId, prefs)
+        autoExecuted = exec.executed
+      } catch (err) {
+        logError('scheduler', 'Autonomous execution failed', { userId, error: err.message })
+      }
+    }
+
+    await saveEquitySnapshot(userId).catch(() => {})
+
+    await createScanCompleteNotification(userId, {
+      title: 'Scan complete',
+      count: saved.length,
+      autoExecuted,
+    })
+
+    await getCollection('scan_history')?.updateOne(
+      { userId, completed_at: { $gte: new Date(Date.now() - 60000) } },
+      { $set: {
+        userId, completed_at: new Date(), mode, auto_executed: autoExecuted,
+        recommendations_generated: saved.length, tickers_scanned: tickersScanned,
+        recommendations: saved.length, executed: autoExecuted, duration_ms, source: 'manual',
+      }},
+      { upsert: true }
+    )
+
+    if (errors.length > 0) {
+      warn('scheduler', `${errors.length} ticker(s) failed during scan`, { userId, errors: errors.slice(0, 3).map(e => `${e.ticker}: ${e.error}`) })
+    }
+    info('scheduler', 'Manual scan complete', { userId, mode, signals: saved.length, autoExecuted, errors: errors.length })
+    return { signals_generated: saved.length, errors: errors.length, results, mode, auto_executed: autoExecuted }
+  } finally {
+    await releaseScanLock(userId)
+  }
 }

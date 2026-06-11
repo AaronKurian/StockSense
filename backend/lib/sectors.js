@@ -87,3 +87,30 @@ export function mergePreferredSectors(...sources) {
   }
   return out
 }
+
+export const CANONICAL_TICKER_SECTORS = {
+  AAPL: 'Technology', MSFT: 'Technology', NVDA: 'Technology', AMD: 'Technology',
+  GOOGL: 'Communication Services', META: 'Communication Services', NFLX: 'Communication Services',
+  DIS: 'Communication Services', CMCSA: 'Communication Services',
+  JNJ: 'Healthcare', UNH: 'Healthcare', PFE: 'Healthcare', ABBV: 'Healthcare', MRK: 'Healthcare',
+  JPM: 'Financials', BAC: 'Financials', GS: 'Financials', V: 'Financials', MA: 'Financials',
+  XOM: 'Energy', CVX: 'Energy', SHEL: 'Energy', BP: 'Energy', COP: 'Energy',
+  CAT: 'Industrials', GE: 'Industrials', HON: 'Industrials', UPS: 'Industrials', BA: 'Industrials',
+  NEE: 'Utilities', DUK: 'Utilities', SO: 'Utilities', AEP: 'Utilities',
+  PG: 'Consumer Defensive', KO: 'Consumer Defensive', PEP: 'Consumer Defensive', WMT: 'Consumer Defensive', COST: 'Consumer Defensive',
+  AMZN: 'Consumer Cyclical', TSLA: 'Consumer Cyclical', NKE: 'Consumer Cyclical', MCD: 'Consumer Cyclical', HD: 'Consumer Cyclical',
+  AMT: 'Real Estate', PLD: 'Real Estate', EQIX: 'Real Estate', SPG: 'Real Estate',
+  LIN: 'Materials', APD: 'Materials', SHW: 'Materials', FCX: 'Materials',
+}
+
+export function resolveSector(ticker, metaSector = null, storedSector = null) {
+  const t = String(ticker || '').toUpperCase()
+  if (!t) return 'Unknown'
+  const fromMeta = normalizeSectorName(metaSector)
+  if (fromMeta) return fromMeta
+  const fromFallback = CANONICAL_TICKER_SECTORS[t]
+  if (fromFallback) return fromFallback
+  const fromStored = normalizeSectorName(storedSector)
+  if (fromStored) return fromStored
+  return 'Unknown'
+}

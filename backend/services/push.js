@@ -53,7 +53,7 @@ export async function sendToUser(userId, { title, body, url, entityId, tag, type
   const subs = await col.find({ userId }).toArray()
   if (!subs.length) return { sent: 0, failed: 0, reason: 'no_subscriptions' }
 
-  const payload = JSON.stringify({ title, body, url: url || '/actions', entityId: entityId || null, tag: tag || null, subtype: subtype || type || null })
+  const payload = JSON.stringify({ title, body, url: url || '/signals', entityId: entityId || null, tag: tag || null, subtype: subtype || type || null })
   let sent = 0, failed = 0
   const toRemove = []
 

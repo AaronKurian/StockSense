@@ -1,6 +1,5 @@
 "use client"
 
-import { Check } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const VALID_SECTORS = [
@@ -30,7 +29,6 @@ export function SectorChipSelector({ value = [], onChange, className, id }) {
                 : "border-white/15 bg-black/30 text-muted-foreground hover:border-white/25 hover:text-foreground"
             )}
           >
-            {isOn && <Check className="size-3 shrink-0 text-emerald-400" aria-hidden />}
             {sector}
           </button>
         )

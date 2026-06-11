@@ -1,8 +1,9 @@
 
 import WebSocket from 'ws'
 import { getCollection } from '../config/db.js'
-import { upsertLatestPrice } from './prices.js'
+import { upsertLatestPrice, refreshQuotesBatch } from './prices.js'
 import { broadcastPrice } from './sse.js'
+import { info } from '../lib/logger.js'
 
 const WS_URL = 'wss://ws.twelvedata.com/v1/quotes/price'
 const HEARTBEAT_INTERVAL_MS = 10_000
@@ -114,12 +115,22 @@ async function handleMessage(raw) {
   }
 
   if (msg.event === 'subscribe-status') {
+    const okSymbols = (msg.success || []).map(s => s.symbol).filter(Boolean)
+    const failSymbols = (msg.fails || []).map(s => s.symbol).filter(Boolean)
     if (msg.status === 'ok') {
-      const ok   = (msg.success || []).map(s => s.symbol).join(', ') || '(none)'
-      const fail = (msg.fails   || []).map(s => s.symbol).join(', ') || '(none)'
-      console.log(`[ws] subscribe-status ok - success: [${ok}]  fails: [${fail}]`)
+      console.log(`[ws] subscribe-status ok - success: [${okSymbols.join(', ') || '(none)'}]  fails: [${failSymbols.join(', ') || '(none)'}]`)
     } else {
       console.warn('[ws] subscribe-status non-ok:', JSON.stringify(msg))
+    }
+    if (failSymbols.length) {
+      info('prices', 'WebSocket subscribe failed - REST backfill scheduled', {
+        tickers: failSymbols,
+        source: 'websocket',
+        reason: msg.status === 'ok' ? 'partial_subscribe_failure' : 'subscribe_rejected',
+      })
+      refreshQuotesBatch(failSymbols, { source: 'websocket' }).catch(err => {
+        console.warn('[ws] REST backfill after subscribe failure:', err.message)
+      })
     }
     return
   }

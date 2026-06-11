@@ -10,23 +10,38 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/hooks/useAuth"
 import { usePushNotifications } from "@/hooks/usePushNotifications"
-import { fetchPreferences, createPreferences, updatePreferences, deleteAccount, clearSession } from "@/lib/api"
+import { fetchPreferences, createPreferences, updatePreferences, updateProfile, deleteAccount, clearSession, fetchManagedWatchlist, addManagedWatchlistItem, removeManagedWatchlistItem } from "@/lib/api"
 import { SectorChipSelector } from "@/components/common/SectorChipSelector"
+import { WatchlistStockSelector } from "@/components/common/WatchlistStockSelector"
+import { emitProfileChanged } from "@/lib/events"
 
 export default function SettingsPage() {
   useEffect(() => { document.title = "Settings - StockSense" }, [])
   const { userId, user, logout } = useAuth()
   const { isSupported, isSubscribed, permission, subscribe, unsubscribe } = usePushNotifications()
   const [prefs, setPrefs] = useState(null)
+  const [managed, setManaged] = useState(null)
+  const [name, setName] = useState("")
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
+    if (user?.name != null) setName(user.name)
+  }, [user?.name])
+
+  useEffect(() => {
     if (!userId) return
-    fetchPreferences(userId)
-      .then(d => { if (d && d.userId) setPrefs(d); else doCreateDefaults() })
+    Promise.all([
+      fetchPreferences(userId).catch(() => null),
+      fetchManagedWatchlist(userId).catch(() => null),
+    ])
+      .then(([p, m]) => {
+        if (p && p.userId) setPrefs(p)
+        else doCreateDefaults()
+        if (m) setManaged(m)
+      })
       .catch(() => doCreateDefaults())
       .finally(() => setLoading(false))
   }, [userId])
@@ -37,11 +52,24 @@ export default function SettingsPage() {
 
   const save = async () => {
     if (!prefs) return
+    const trimmed = name.trim()
+    if (!trimmed) {
+      toast.error('Name is required')
+      return
+    }
     setSaving(true)
     try {
+      if (trimmed !== user?.name) {
+        const updated = await updateProfile(trimmed)
+        emitProfileChanged(updated)
+      }
       const data = await updatePreferences(userId, prefs)
       setPrefs(data)
-      toast.success('Preferences saved')
+      if (managed && managed.count > (data.max_stocks || 15)) {
+        toast.warning(`Tracking ${managed.count} stocks but max is ${data.max_stocks}. Remove stocks or raise the limit.`)
+      } else {
+        toast.success('Settings saved')
+      }
     } catch (err) {
       toast.error(err.message || 'Save failed')
     } finally {
@@ -70,7 +98,12 @@ export default function SettingsPage() {
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div>
             <label className="text-xs text-muted-foreground">Name</label>
-            <Input readOnly value={user?.name || ''} className="mt-1 rounded-md border-white/10 bg-black/30" />
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={100}
+              className="mt-1 rounded-md border-white/10 bg-black/30"
+            />
           </div>
           <div>
             <label className="text-xs text-muted-foreground">Email</label>
@@ -89,7 +122,7 @@ export default function SettingsPage() {
               { value: 'agentic', label: 'Agentic', badge: 'Recommended', desc: 'StockSense automatically buys and sells according to your preferences.' },
               { value: 'manual', label: 'Manual', badge: null, desc: 'StockSense generates recommendations that require your approval.' },
             ].map(m => (
-              <button key={m.value} onClick={() => setPrefs(p => ({ ...p, mode: m.value }))}
+              <button key={m.value} onClick={() => setPrefs(p => ({ ...p, mode: m.value, enabled: true }))}
                 className={`flex-1 rounded-md border p-4 text-left transition-all ${prefs?.mode === m.value ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-black/30 hover:border-white/20'}`}>
                 <div className="flex items-center gap-2">
                   <p className="text-sm font-semibold">{m.label}</p>
@@ -98,14 +131,6 @@ export default function SettingsPage() {
                 <p className="text-xs text-muted-foreground mt-1">{m.desc}</p>
               </button>
             ))}
-          </div>
-          <div className="flex items-center gap-3">
-            <label className="text-xs text-muted-foreground">Agent enabled</label>
-            <button onClick={() => setPrefs(p => ({ ...p, enabled: !p.enabled }))}
-              className={`relative h-6 w-11 rounded-full transition-colors ${prefs?.enabled ? 'bg-emerald-500' : 'bg-white/20'}`}>
-              <span className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white transition-transform ${prefs?.enabled ? 'translate-x-5' : ''}`} />
-            </button>
-            <Badge variant="outline" className={prefs?.enabled ? 'border-emerald-500/30 text-emerald-200' : 'border-white/10'}>{prefs?.enabled ? 'Active' : 'Paused'}</Badge>
           </div>
         </CardContent>
       </Card>
@@ -202,6 +227,7 @@ export default function SettingsPage() {
                 className="flex-1" />
               <span className="font-mono text-sm w-10 text-right">{prefs?.max_stocks || 15}</span>
             </div>
+            <p className="mt-1 text-[10px] text-muted-foreground">Limits portfolio positions and stocks the agent monitors</p>
           </div>
         </CardContent>
       </Card>
@@ -227,15 +253,41 @@ export default function SettingsPage() {
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-[10px] text-muted-foreground">More frequent scans may generate more recommendations and increase AI/API usage.</p>
+            <p className="mt-2 text-[10px] text-muted-foreground">More frequent scans may generate more recommendations.</p>
           </div>
           <div className="md:col-span-2">
             <label className="text-xs text-muted-foreground">Preferred Sectors</label>
-            <p className="mt-1 text-[10px] text-muted-foreground">Boosts ranking for matching sectors — does not exclude other sectors.</p>
             <SectorChipSelector
               className="mt-2"
               value={prefs?.preferred_sectors || []}
               onChange={(next) => setPrefs(p => ({ ...p, preferred_sectors: next }))}
+            />
+          </div>
+          <div className="md:col-span-2 space-y-3 border-t border-white/10 pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs text-muted-foreground">
+                Stocks Monitored
+                <span className="ml-2 font-mono text-foreground">
+                  ({managed?.count ?? 0}/{prefs?.max_stocks || managed?.max_stocks || 15})
+                </span>
+              </label>
+              <p className="text-[10px] text-muted-foreground">Tickers the agent scans on each cycle</p>
+            </div>
+            <WatchlistStockSelector
+              sectors={prefs?.preferred_sectors || []}
+              stocks={managed?.items || []}
+              maxStocks={prefs?.max_stocks || managed?.max_stocks || 15}
+              listVariant="rows"
+              onAdd={async (ticker, name) => {
+                const data = await addManagedWatchlistItem(userId, { ticker, name })
+                setManaged(data)
+                toast.success(`Added ${ticker}`)
+              }}
+              onRemove={async (ticker) => {
+                const data = await removeManagedWatchlistItem(userId, ticker)
+                setManaged(data)
+                toast.success(`Removed ${ticker}`)
+              }}
             />
           </div>
         </CardContent>
@@ -280,12 +332,12 @@ export default function SettingsPage() {
 
       <Card className="rounded-2xl border-rose-500/20 bg-rose-500/5">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base text-rose-300"><Trash2 className="size-4" /> Danger Zone</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base text-rose-300">Delete your account</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-3 flex items-center justify-between">
           <p className="text-xs text-muted-foreground">Permanently delete your account and all associated data. This cannot be undone.</p>
           <Button variant="outline" size="sm" className="rounded-md border-rose-500/30 text-rose-300 hover:bg-rose-500/10" onClick={() => setShowDeleteModal(true)}>
-            <Trash2 className="size-3.5 mr-1.5" /> Delete Account
+            <Trash2 className="size-3.5 mr-1.5" /> Delete
           </Button>
         </CardContent>
       </Card>
@@ -297,7 +349,7 @@ export default function SettingsPage() {
               <div className="flex items-center gap-3">
                   <p className="text-sm font-semibold">Delete Account</p>
               </div>
-              <p className="text-sm text-muted-foreground">All your data will be permanently deleted including your portfolio, trades, recommendations, watchlists, and preferences.</p>
+              <p className="text-sm text-muted-foreground">All your data will be permanently deleted including your portfolio, trades, recommendations, watchlists and preferences.</p>
               <div className="flex items-center gap-2 justify-center p-2">
                 <Button variant="outline" size="sm" className="w-full max-w-32 sm:max-w-44" onClick={() => setShowDeleteModal(false)}>Cancel</Button>
                 <Button variant="destructive" size="sm" className="w-full max-w-32 sm:max-w-44 bg-rose-600 hover:bg-rose-700" disabled={deleting} onClick={async () => {

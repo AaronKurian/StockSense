@@ -1,6 +1,9 @@
 import { getCollection } from '../config/db.js'
-import { getLatestPricesBatch } from './prices.js'
+import { resolveSector } from '../lib/sectors.js'
+import { getLatestPricesBatch, refreshQuotesBatch } from './prices.js'
+import { getMetadataBatch, getTickerMetadata, repairUserSectors } from './metadata.js'
 import { subscribeToTickers } from './websocket.js'
+import { savePortfolioSnapshot } from './learning.js'
 
 const VALID_ACTIONS = new Set(['BUY', 'SELL'])
 const VALID_STATUSES = new Set(['open', 'closed', 'cancelled'])
@@ -11,6 +14,7 @@ export async function markToMarket(userId) {
   const positions = posCol ? await posCol.find({ userId }).toArray() : []
   const { virtual_cash, starting_capital } = await getVirtualCash(userId)
   const priceMap = positions.length ? await getLatestPricesBatch(positions.map(p => p.ticker)) : new Map()
+  const metaMap = positions.length ? await getMetadataBatch(positions.map(p => p.ticker)) : new Map()
 
   let positionsValue = 0
   const marked = positions.map(p => {
@@ -18,11 +22,46 @@ export async function markToMarket(userId) {
     const mark = (live != null && Number.isFinite(Number(live)) && Number(live) > 0) ? Number(live) : Number(p.average_price)
     const value = Number((Number(p.quantity) * mark).toFixed(2))
     positionsValue += value
-    return { ...p, mark, value }
+    const sector = resolveSector(p.ticker, metaMap.get(p.ticker)?.sector, p.sector)
+    return { ...p, mark, value, sector }
   })
 
   positionsValue = Number(positionsValue.toFixed(2))
   return { cash: virtual_cash, starting_capital, positionsValue, totalEquity: Number((virtual_cash + positionsValue).toFixed(2)), positions: marked }
+}
+
+export async function getPortfolioSummary(userId) {
+  try { await repairUserSectors(userId) } catch {}
+  const posCol = getCollection('portfolio_positions')
+  const held = posCol ? await posCol.find({ userId }, { projection: { ticker: 1 } }).toArray() : []
+  if (held.length) {
+    try { await refreshQuotesBatch(held.map(p => p.ticker), { source: 'portfolio' }) } catch {}
+  }
+  const marked = await markToMarket(userId)
+  const costBasis = marked.positions.reduce((s, p) => s + Number(p.average_price) * Number(p.quantity), 0)
+  const unrealized_pnl = Number((marked.positionsValue - costBasis).toFixed(2))
+  const unrealized_pnl_pct = costBasis > 0 ? Number(((unrealized_pnl / costBasis) * 100).toFixed(2)) : 0
+  const portfolio_return_pct = marked.starting_capital > 0
+    ? Number(((marked.totalEquity - marked.starting_capital) / marked.starting_capital * 100).toFixed(2))
+    : 0
+  return {
+    total_equity: marked.totalEquity,
+    virtual_cash: marked.cash,
+    positions_value: marked.positionsValue,
+    cost_basis: Number(costBasis.toFixed(2)),
+    unrealized_pnl,
+    unrealized_pnl_pct,
+    portfolio_return_pct,
+    position_count: marked.positions.length,
+    positions: marked.positions.map(p => ({
+      ticker: p.ticker,
+      quantity: p.quantity,
+      average_price: p.average_price,
+      mark: p.mark,
+      value: p.value,
+      unrealized_pnl: Number((p.value - Number(p.average_price) * Number(p.quantity)).toFixed(2)),
+    })),
+  }
 }
 
 export async function getVirtualCash(userId) {
@@ -111,6 +150,11 @@ export async function createVirtualTrade({ userId, ticker, action, quantity, ent
   if (!ticker) throw new Error('ticker is required')
   if (!action || !VALID_ACTIONS.has(action)) throw new Error('action must be BUY or SELL')
 
+  if (signal_id) {
+    const existing = await col.findOne({ userId, signal_id: String(signal_id) })
+    if (existing) return existing
+  }
+
   const qty = Number(quantity)
   if (!Number.isFinite(qty) || qty <= 0) throw new Error('invalid quantity')
   const price = Number(entry_price)
@@ -127,7 +171,7 @@ export async function createVirtualTrade({ userId, ticker, action, quantity, ent
     const pos = await posCol.findOne({ userId, ticker: t })
     const owned = pos ? Math.floor(Number(pos.quantity)) : 0
     if (qty > owned) {
-      throw new Error(`Cannot sell ${qty} shares of ${t} — only own ${owned}`)
+      throw new Error(`Cannot sell ${qty} shares of ${t} - only own ${owned}`)
     }
   }
 
@@ -146,9 +190,18 @@ export async function createVirtualTrade({ userId, ticker, action, quantity, ent
         const highestSeen = Math.max(price, existing.highest_price_seen || price)
         await posCol.updateOne({ userId, ticker: t }, { $set: { quantity: newQty, average_price: newAvg, highest_price_seen: highestSeen, updated_at: new Date() } })
       } else {
-        await posCol.updateOne({ userId, ticker: t }, { $set: { userId, ticker: t, quantity: qty, average_price: price, highest_price_seen: price, sector: null, created_at: new Date(), updated_at: new Date() } }, { upsert: true })
+        const meta = await getTickerMetadata(t)
+        const sector = resolveSector(t, meta.sector, null)
+        await posCol.updateOne({ userId, ticker: t }, { $set: { userId, ticker: t, quantity: qty, average_price: price, highest_price_seen: price, sector, created_at: new Date(), updated_at: new Date() } }, { upsert: true })
 
         try { subscribeToTickers([t]) } catch {}
+      }
+      if (existing && (existing.sector == null || existing.sector === 'Unknown')) {
+        const meta = await getTickerMetadata(t)
+        const sector = resolveSector(t, meta.sector, existing.sector)
+        if (sector !== 'Unknown') {
+          await posCol.updateOne({ userId, ticker: t }, { $set: { sector, updated_at: new Date() } })
+        }
       }
     }
   } else if (action === 'SELL') {
@@ -184,6 +237,7 @@ export async function createVirtualTrade({ userId, ticker, action, quantity, ent
   }
 
   const res = await col.insertOne(doc)
+  try { await savePortfolioSnapshot(userId) } catch {}
   return { ...doc, _id: res.insertedId }
 }
 
