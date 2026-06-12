@@ -19,6 +19,12 @@ export function ChatMessage({ message }) {
       )}>
         {isUser ? (
           <p>{message.content}</p>
+        ) : !message.content ? (
+          <span className="inline-flex items-center gap-1">
+            <span className="size-1.5 rounded-full bg-foreground/50 animate-bounce [animation-delay:0ms]" />
+            <span className="size-1.5 rounded-full bg-foreground/50 animate-bounce [animation-delay:150ms]" />
+            <span className="size-1.5 rounded-full bg-foreground/50 animate-bounce [animation-delay:300ms]" />
+          </span>
         ) : (
           <ReactMarkdown components={{
             p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,

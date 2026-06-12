@@ -10,7 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ChatMessage } from "@/components/chat/ChatMessage"
-import { agentChat } from "@/lib/api"
+import { agentChatStream } from "@/lib/api"
 
 const SUGGESTED_PROMPTS = [
   "Analyze my portfolio",
@@ -39,27 +39,87 @@ export function AgentChatPage() {
     setError(null)
 
     const userMsg = { id: `u_${Date.now()}`, role: "user", content: trimmed }
+    const assistantId = `a_${Date.now()}`
     setMessages(prev => [...prev, userMsg])
     setInput("")
     setLoading(true)
 
+    // Create an empty assistant message that we'll append to
+    const assistantMsg = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      toolCalls: [],
+    }
+    setMessages(prev => [...prev, assistantMsg])
+
     try {
-      const data = await agentChat(userId, trimmed)
-      const assistantMsg = {
-        id: `a_${Date.now()}`,
-        role: "assistant",
-        content: data.response || 'No response from agent.',
-        toolCalls: data.toolCalls || [],
+      const { stream } = agentChatStream(userId, trimmed)
+      const reader = stream.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        // Process complete SSE lines
+        const lines = buffer.split("\n")
+        buffer = lines.pop() || "" // keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue
+          const dataStr = line.slice(6)
+          try {
+            const data = JSON.parse(dataStr)
+            if (data.text) {
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantId
+                    ? { ...m, content: m.content + data.text }
+                    : m
+                )
+              )
+            }
+            if (data.toolCall) {
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantId
+                    ? { ...m, toolCalls: [...m.toolCalls, data.toolCall] }
+                    : m
+                )
+              )
+            }
+            if (data.error) {
+              setError(data.error)
+            }
+            if (data.done) {
+              // Final toolCalls from completion event
+              if (data.toolCalls?.length) {
+                setMessages(prev =>
+                  prev.map(m =>
+                    m.id === assistantId
+                      ? { ...m, toolCalls: data.toolCalls }
+                      : m
+                  )
+                )
+              }
+            }
+          } catch {
+            // skip unparseable lines
+          }
+        }
       }
-      setMessages(prev => [...prev, assistantMsg])
     } catch (err) {
       setError(err.message)
-      setMessages(prev => [...prev, {
-        id: `e_${Date.now()}`,
-        role: "assistant",
-        content: `Error: ${err.message}`,
-        isError: true,
-      }])
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === assistantId && !m.content
+            ? { ...m, content: `Error: ${err.message}` }
+            : m
+        )
+      )
     } finally {
       setLoading(false)
     }

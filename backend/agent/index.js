@@ -187,3 +187,40 @@ export async function runAgent(userId, message) {
     events: events.length,
   };
 }
+
+/**
+ * Streaming variant of runAgent that yields text deltas as they arrive from the ADK.
+ * Use this for SSE-based streaming chat endpoints.
+ *
+ * Yields objects: { text?: string, toolCall?: { tool: string, args: object }, done?: boolean, error?: string }
+ */
+export async function* runAgentStream(userId, message) {
+  const toolCalls = [];
+
+  try {
+    for await (const event of runner.runEphemeral({
+      userId,
+      newMessage: { role: 'user', parts: [{ text: message }] },
+    })) {
+      // Forward text deltas from the agent author
+      if (event.author === 'stocksense_agent' && event.content?.parts) {
+        for (const part of event.content.parts) {
+          if (part.text) {
+            yield { text: part.text };
+          }
+          if (part.functionCall) {
+            const tc = { tool: part.functionCall.name, args: part.functionCall.args };
+            toolCalls.push(tc);
+            yield { toolCall: tc };
+          }
+        }
+      }
+    }
+
+    // Signal completion with tool call summary
+    yield { done: true, toolCalls };
+  } catch (err) {
+    yield { error: err.message };
+    yield { done: true, toolCalls };
+  }
+}

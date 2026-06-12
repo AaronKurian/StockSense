@@ -187,6 +187,59 @@ export function agentChat(userId, message) {
   return apiFetch('/agent/chat', { method: 'POST', body: JSON.stringify({ userId, message }) })
 }
 
+/**
+ * Streaming variant of agentChat that yields text deltas, tool calls, and completion events.
+ * Returns an object with { stream: ReadableStream, abort: () => void }.
+ *
+ * Usage:
+ *   const { stream, abort } = agentChatStream(userId, message)
+ *   const reader = stream.getReader()
+ *   const decoder = new TextDecoder()
+ *   while (true) {
+ *     const { done, value } = await reader.read()
+ *     if (done) break
+ *     // Parse SSE lines from decoder.decode(value)
+ *   }
+ */
+export function agentChatStream(userId, message) {
+  const controller = new AbortController()
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const res = await fetch(`${BASE}/agent/chat/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, message }),
+          signal: controller.signal,
+        })
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ error: err.error || 'Request failed' })}\n\n`))
+          controller.close()
+          return
+        }
+
+        const reader = res.body.getReader()
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          controller.enqueue(value)
+        }
+        controller.close()
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ error: err.message })}\n\n`))
+        }
+        controller.close()
+      }
+    },
+  })
+
+  return { stream, abort: () => controller.abort() }
+}
+
 export function agentScan(userId) {
   return apiFetch('/agent/scan', { method: 'POST', body: JSON.stringify({ userId }) })
 }

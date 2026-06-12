@@ -24,7 +24,7 @@ import { getPreferences, createDefaultPreferences, updatePreferences } from "./s
 import { createVirtualTrade, closeVirtualTrade, getVirtualTrades, getTradeStats, validateExecution, getVirtualCash, calculatePositionSize, markToMarket, getPortfolioSummary } from "./services/trades.js"
 import { createNotification, getNotifications, markRead, markAllRead, getUnreadCount } from "./services/notifications.js"
 import { runAutonomousExecution, acquireScanLock, releaseScanLock } from "./services/autonomy.js"
-import { runAgent } from "./agent/index.js"
+import { runAgent, runAgentStream } from "./agent/index.js"
 import { startScheduler, triggerManualScan, getNextScanTime } from "./services/scheduler.js"
 import { initPush, getPublicKey, subscribe as pushSubscribe, unsubscribe as pushUnsubscribe } from "./services/push.js"
 import { getPortfolioIntelligence } from "./services/intelligence.js"
@@ -919,6 +919,53 @@ app.post('/agent/chat', async (req, res) => {
   } catch (err) {
     logError('agent', 'Chat failed', { error: err.message })
     res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/agent/chat/stream', async (req, res) => {
+  try {
+    const { userId, message } = req.body
+    if (!userId || !message) return res.status(400).json({ error: 'userId and message are required' })
+    info('agent', 'Streaming chat request', { userId, message: message.slice(0, 80) })
+
+    // SSE headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+
+    const contextMessage = `[User: ${userId}] ${message}`
+    let toolCallCount = 0
+
+    for await (const chunk of runAgentStream(userId, contextMessage)) {
+      if (chunk.text) {
+        res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`)
+      }
+      if (chunk.toolCall) {
+        toolCallCount++
+        res.write(`data: ${JSON.stringify({ toolCall: chunk.toolCall })}\n\n`)
+      }
+      if (chunk.error) {
+        res.write(`data: ${JSON.stringify({ error: chunk.error })}\n\n`)
+      }
+      if (chunk.done) {
+        res.write(`data: ${JSON.stringify({ done: true, toolCalls: chunk.toolCalls })}\n\n`)
+      }
+    }
+
+    info('agent', 'Streaming chat complete', { userId, toolCalls: toolCallCount })
+    res.end()
+  } catch (err) {
+    logError('agent', 'Streaming chat failed', { error: err.message })
+    // If headers already sent, write error as SSE event; otherwise send JSON
+    if (res.headersSent) {
+      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`)
+      res.end()
+    } else {
+      res.status(500).json({ error: err.message })
+    }
   }
 })
 
