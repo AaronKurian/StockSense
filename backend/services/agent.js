@@ -560,13 +560,14 @@ export async function getRecommendationsByStatus(userId, status, limit = 50) {
   return col.find(q).sort({ created_at: -1 }).limit(Number(limit)).toArray()
 }
 
-export async function getRecommendationsForUser(userId, { limit = 50, since = null, signal = null, status = null } = {}) {
+export async function getRecommendationsForUser(userId, { limit = 20, since = null, signal = null, status = null, ticker = null } = {}) {
   const col = getCollection('recommendation_log')
   if (!col) throw new Error('MongoDB not connected')
   if (!userId) throw new Error('userId is required')
   const q = { userId }
   if (since) q.created_at = { $gte: new Date(since) }
   if (signal) q.signal = signal
+  if (ticker) q.ticker = String(ticker).toUpperCase()
   if (status === 'generated') q.status = 'generated'
   else if (status === 'completed') q.status = { $in: ['executed', 'approved', 'rejected', 'expired', 'blocked'] }
   else if (status && VALID_REC_STATUSES.has(status)) q.status = status

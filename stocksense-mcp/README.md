@@ -2,7 +2,10 @@
 
 Cloud Run deployable MongoDB MCP Server for StockSense AI.
 
-Exposes the official `mongodb-mcp-server` over HTTP transport at `/mcp` in read-only mode.
+Exposes the official `mongodb-mcp-server` over HTTP transport at `/mcp` with **restricted write mode**:
+
+- ✅ write tools kept for StockSense adapters: `insert-many`, `update-many`
+- ❌ destructive/admin tools disabled: `delete-many`, `drop-*`, `rename-collection`, `create-*`, atlas-local deployment mutations
 
 ## Environment Variables
 
@@ -16,6 +19,8 @@ Exposes the official `mongodb-mcp-server` over HTTP transport at `/mcp` in read-
 export MDB_MCP_CONNECTION_STRING="mongodb+srv://user:pass@cluster.mongodb.net/stocksense"
 npm start
 ```
+
+`npm start` uses `--disabledTools` to enforce the restricted profile.
 
 Server listens on `http://localhost:8080/mcp`
 

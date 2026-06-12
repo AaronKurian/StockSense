@@ -100,16 +100,16 @@ export default function DashboardPage() {
           </div>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">AI powered investment operations - signals, portfolio and autonomous execution.</p>
         </div> 
-        <div className="flex items-center p-0.5 rounded-md bg-gradient-to-r from-emerald-500 to-blue-500">
+        <div className="flex w-fit items-center p-0.5 rounded-md bg-gradient-to-r from-emerald-500 to-blue-500">
           <Button
             onClick={runScan}
             disabled={scanning || !userId}
             className="rounded-sm p-4.5 bg-black shadow-lg disabled:opacity-60"
           >
-            <span className="bg-gradient-to-r from-emerald-400 to-blue-500 bg-clip-text text-transparent flex items-center">
+            <div className="bg-gradient-to-r from-emerald-400 to-blue-500 bg-clip-text text-transparent flex items-center">
               <Zap className={`size-4 mr-1.5 text-emerald-500 ${scanning ? 'animate-pulse' : ''}`} />
               {scanning ? 'Scanning…' : 'Run Agent Scan'}
-            </span>
+            </div>
           </Button>
         </div>
       </div>

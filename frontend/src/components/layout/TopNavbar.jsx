@@ -74,14 +74,6 @@ export function TopNavbar() {
           </Button>
         </div>
       </div>
-
-      {pathname.startsWith("/dashboard") && (
-        <div className="border-t border-white/5 px-4 py-2 md:hidden">
-          <p className="text-[11px] text-muted-foreground">
-            SSE stream: <span className="font-mono text-emerald-300/90">active</span>
-          </p>
-        </div>
-      )}
     </header>
   )
 }

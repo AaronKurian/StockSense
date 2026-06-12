@@ -117,7 +117,7 @@ export default function SettingsPage() {
           <CardTitle className="flex items-center gap-2 text-base"><Brain className="size-4 text-emerald-300" /> Investment Mode</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex gap-3">
+          <div className="flex flex-col sm:flex-row gap-3">
             {[
               { value: 'agentic', label: 'Agentic', badge: 'Recommended', desc: 'StockSense automatically buys and sells according to your preferences.' },
               { value: 'manual', label: 'Manual', badge: null, desc: 'StockSense generates recommendations that require your approval.' },

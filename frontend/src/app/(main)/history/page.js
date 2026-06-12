@@ -75,7 +75,7 @@ function HistoryPageContent() {
         </p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         {stats.map(([k, v]) => (
           <Card key={k} className="rounded-2xl border-white/10 bg-white/[0.03]">
             <CardContent className="p-4">
@@ -107,13 +107,13 @@ function HistoryPageContent() {
               <caption className="sr-only">Logged AI recommendations</caption>
               <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
-                  <th scope="col" className="pb-3 font-medium">Generated</th>
-                  <th scope="col" className="pb-3 font-medium">Executed / Checked</th>
-                  <th scope="col" className="pb-3 font-medium">Ticker</th>
-                  <th scope="col" className="pb-3 font-medium">Signal</th>
-                  <th scope="col" className="pb-3 font-medium">Confidence</th>
-                  <th scope="col" className="pb-3 font-medium">Status</th>
-                  <th scope="col" className="pb-3 font-medium">Rationale</th>
+                  <th scope="col" className="pb-3 p-3 font-medium">Generated</th>
+                  <th scope="col" className="pb-3 p-3 font-medium">Exec/Chk</th>
+                  <th scope="col" className="pb-3 p-3 font-medium">Ticker</th>
+                  <th scope="col" className="pb-3 p-3 font-medium">Signal</th>
+                  <th scope="col" className="pb-3 p-3 font-medium">Confidence</th>
+                  <th scope="col" className="pb-3 p-3 font-medium">Status</th>
+                  <th scope="col" className="pb-3 p-3 font-medium">Rationale</th>
                 </tr>
               </thead>
               <tbody>
@@ -132,10 +132,10 @@ function HistoryPageContent() {
                       ref={isHighlighted ? highlightRef : undefined}
                       className={`border-t border-white/5 ${isHighlighted ? "bg-emerald-500/10 ring-1 ring-inset ring-emerald-500/30" : ""}`}
                     >
-                      <td className="py-3 text-muted-foreground text-xs whitespace-nowrap">
+                      <td className="p-3 text-muted-foreground text-xs whitespace-nowrap">
                         {formatDateTime(rec.created_at)}
                       </td>
-                      <td className="py-3 text-muted-foreground text-xs whitespace-nowrap" title={isMonitoring ? 'Last checked' : 'Executed'}>
+                      <td className="p-3 text-muted-foreground text-xs whitespace-nowrap" title={isMonitoring ? 'Last checked' : 'Executed'}>
                         {followUp ? (
                           <span>
                             {isMonitoring && <span className="text-[10px] opacity-60 block">Checked</span>}
@@ -143,21 +143,21 @@ function HistoryPageContent() {
                           </span>
                         ) : '-'}
                       </td>
-                      <td className="py-3 font-semibold">{rec.ticker}</td>
-                      <td className="py-3">
+                      <td className="p-3 font-semibold">{rec.ticker}</td>
+                      <td className="p-3">
                         <Badge variant="outline" className={signalColor[rec.signal] ?? ''}>
                           {rec.signal}
                         </Badge>
                       </td>
-                      <td className="py-3 font-mono">
+                      <td className="p-3 font-mono">
                         {rec.confidence != null ? `${Math.round(rec.confidence * 100)}%` : '-'}
                       </td>
-                      <td className="py-3">
+                      <td className="p-3">
                         <Badge variant="outline" className={STATUS_BADGE_STYLES[displayKey] ?? ''}>
                           {label}
                         </Badge>
                       </td>
-                      <td title={rec.rationale} className="py-3 text-muted-foreground max-w-xs truncate text-xs">
+                      <td title={rec.rationale} className="p-3 text-muted-foreground max-w-xs truncate text-xs">
                         {rec.rationale ?? '-'}
                       </td>
                     </tr>

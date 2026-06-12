@@ -176,8 +176,8 @@ export function PortfolioSummary() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-white/10 bg-white/[0.03] lg:col-span-3">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+      <Card className="rounded-2xl border-white/10 bg-white/[0.03] lg:col-span-3 pb-8">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle className="flex items-center gap-2 text-base font-medium">
             <PieIcon className="size-4 text-blue-300" />
             Sector allocation
