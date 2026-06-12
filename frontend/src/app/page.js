@@ -1,4 +1,4 @@
-import { LandingView } from "@/components/landing/LandingView"
+import { HomePageClient } from "@/components/landing/HomePageClient"
 import { buildPageMetadata, absoluteUrl, siteConfig } from "@/lib/seo"
 
 export const metadata = buildPageMetadata({
@@ -32,13 +32,5 @@ const homeStructuredData = {
 }
 
 export default function HomePage() {
-  return (
-    <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(homeStructuredData) }}
-      />
-      <LandingView />
-    </>
-  )
+  return <HomePageClient structuredData={homeStructuredData} />
 }
