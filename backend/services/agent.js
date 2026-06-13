@@ -1,26 +1,16 @@
 import { getCollection } from '../config/db.js'
-import { fetchTimeSeries } from './twelvedata.js'
-import { getLatestPricesBatch, refreshQuotesBatch } from './prices.js'
-import { getOrFetchCached, CACHE_TTL_MS } from './marketCache.js'
-import { logApiUsage } from '../lib/apiUsage.js'
 import { createNotification, formatRecommendationMessage } from './notifications.js'
 import { getPreferences } from './preferences.js'
 import { subscribeToTickers } from './websocket.js'
 import { info as logInfo, warn as logWarn } from '../lib/logger.js'
 import { migrateSectorFields, parseAndValidateSectors, applySectorPreferenceBonus, mergePreferredSectors, resolveSector } from '../lib/sectors.js'
-import { getTickerMetadata, getMetadataBatch } from './metadata.js'
 import { markToMarket } from './trades.js'
+import { getStructuredRecommendationProvider } from '../infrastructure/ai/providers/index.js'
+import { getMarketDataProvider } from '../infrastructure/market/providers/index.js'
+import { recommendationRepository } from '../repositories/index.js'
 
 const VALID_SIGNALS = new Set(['BUY', 'HOLD', 'EXIT', 'WATCH', 'REBALANCE'])
 const VALID_USER_ACTIONS = new Set(['confirmed', 'ignored', 'snoozed'])
-
-const VERTEX_PROJECT = process.env.GOOGLE_CLOUD_PROJECT || 'stocksense-13'
-const VERTEX_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'global'
-const VERTEX_MODEL = process.env.VERTEX_MODEL || 'gemini-3.5-flash'
-const VERTEX_HOST = VERTEX_LOCATION === 'global'
-  ? 'https://aiplatform.googleapis.com'
-  : `https://${VERTEX_LOCATION}-aiplatform.googleapis.com`
-const VERTEX_ENDPOINT = `${VERTEX_HOST}/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/${VERTEX_MODEL}:generateContent`
 
 const TICKER_DELAY_MS = Number(process.env.AGENT_TICKER_DELAY_MS ?? 2000)
 const GEMINI_MAX_RETRIES = Number(process.env.AGENT_GEMINI_MAX_RETRIES ?? 3)
@@ -253,7 +243,8 @@ export async function get_portfolio(userId) {
   if (!col) return null
   const positions = await col.find({ userId }).sort({ ticker: 1 }).toArray()
   if (!positions.length) return []
-  const metaMap = await getMetadataBatch(positions.map(p => p.ticker))
+  const marketDataProvider = await getMarketDataProvider()
+  const metaMap = await marketDataProvider.getMetadataBatch(positions.map(p => p.ticker))
   return positions.map(p => ({
     ...p,
     sector: resolveSector(p.ticker, metaMap.get(p.ticker)?.sector, p.sector),
@@ -261,10 +252,8 @@ export async function get_portfolio(userId) {
 }
 
 export async function get_latest_price(ticker) {
-  const { resolveLatestPrice } = await import('./prices.js')
-  const result = await resolveLatestPrice(ticker)
-  if (result.ok) return result.doc
-  return null
+  const marketDataProvider = await getMarketDataProvider()
+  return marketDataProvider.getLatestPrice(ticker)
 }
 
 export async function addPosition({ userId, ticker, quantity, average_price, sector = null }) {
@@ -306,7 +295,8 @@ export async function getPortfolio(userId) {
 export async function calculatePortfolioValue(userId) {
   const positions = await get_portfolio(userId) || []
   const tickers = positions.map(p => p.ticker)
-  const priceMap = await getLatestPricesBatch(tickers)
+  const marketDataProvider = await getMarketDataProvider()
+  const priceMap = await marketDataProvider.getLatestPricesBatch(tickers)
   let total = 0
   const details = positions.map(position => {
     const latest = priceMap.get(position.ticker)
@@ -321,7 +311,8 @@ export async function calculatePortfolioValue(userId) {
 export async function calculateSectorAllocation(userId) {
   const marked = await markToMarket(userId)
   if (marked.totalEquity <= 0) return []
-  const metaMap = marked.positions.length ? await getMetadataBatch(marked.positions.map(p => p.ticker)) : new Map()
+  const marketDataProvider = await getMarketDataProvider()
+  const metaMap = marked.positions.length ? await marketDataProvider.getMetadataBatch(marked.positions.map(p => p.ticker)) : new Map()
   const bySector = new Map()
   if (marked.cash > 0) bySector.set('Cash', marked.cash)
   for (const p of marked.positions) {
@@ -362,8 +353,7 @@ async function notifyRecommendation(userId, { signal, ticker, confidence, recId 
 }
 
 export async function saveRecommendation({ userId, ticker, signal, confidence = null, rationale = '', supporting_factors = [], risks = [], user_action = null }) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   if (!userId) throw new Error('userId is required')
   if (!ticker) throw new Error('ticker is required')
   if (!signal || !VALID_SIGNALS.has(signal)) throw new Error('invalid signal')
@@ -473,8 +463,7 @@ export async function saveRecommendation({ userId, ticker, signal, confidence = 
 }
 
 export async function expireStaleRecommendations() {
-  const col = getCollection('recommendation_log')
-  if (!col) return 0
+  const col = recommendationRepository.collection()
   const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000)
   const result = await col.updateMany(
     { status: 'generated', created_at: { $lt: fortyEightHoursAgo } },
@@ -489,8 +478,7 @@ export async function expireStaleRecommendations() {
 const VALID_REC_STATUSES = new Set(['generated', 'approved', 'rejected', 'executed', 'expired', 'blocked'])
 
 export async function approveRecommendation(recId) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   const { ObjectId } = await import('mongodb')
   let q
   try { q = { _id: new ObjectId(recId) } } catch { q = { _id: recId } }
@@ -502,8 +490,7 @@ export async function approveRecommendation(recId) {
 }
 
 export async function rejectRecommendation(recId) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   const { ObjectId } = await import('mongodb')
   let q
   try { q = { _id: new ObjectId(recId) } } catch { q = { _id: recId } }
@@ -515,8 +502,7 @@ export async function rejectRecommendation(recId) {
 }
 
 export async function blockRecommendation(recId, reason) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   const { ObjectId } = await import('mongodb')
   let oid
   try { oid = new ObjectId(recId) } catch { oid = recId }
@@ -533,8 +519,7 @@ export async function blockRecommendation(recId, reason) {
 }
 
 export async function executeRecommendation(recId, { execution_mode = 'manual' } = {}) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   const { ObjectId } = await import('mongodb')
   let oid
   try { oid = new ObjectId(recId) } catch { oid = recId }
@@ -552,8 +537,7 @@ export async function executeRecommendation(recId, { execution_mode = 'manual' }
 }
 
 export async function getRecommendationsByStatus(userId, status, limit = 50) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   if (!userId) throw new Error('userId is required')
   const q = { userId }
   if (status && VALID_REC_STATUSES.has(status)) q.status = status
@@ -561,8 +545,7 @@ export async function getRecommendationsByStatus(userId, status, limit = 50) {
 }
 
 export async function getRecommendationsForUser(userId, { limit = 20, since = null, signal = null, status = null, ticker = null } = {}) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   if (!userId) throw new Error('userId is required')
   const q = { userId }
   if (since) q.created_at = { $gte: new Date(since) }
@@ -575,8 +558,7 @@ export async function getRecommendationsForUser(userId, { limit = 20, since = nu
 }
 
 export async function getRecommendationHistory(userId, { limit = 100 } = {}) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   if (!userId) throw new Error('userId is required')
 
   const rows = await col.find({ userId }).sort({ created_at: -1 }).limit(Number(limit) * 4).toArray()
@@ -599,15 +581,13 @@ export async function getRecommendationHistory(userId, { limit = 100 } = {}) {
 }
 
 export async function getLatestRecommendationForTicker(userId, ticker) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   if (!userId || !ticker) throw new Error('userId and ticker required')
   return await col.find({ userId, ticker: String(ticker).toUpperCase() }).sort({ created_at: -1 }).limit(1).next() || null
 }
 
 export async function getLatestRecommendationsForTickers(userId, tickers) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   if (!tickers.length) return new Map()
   const pipeline = [
     { $match: { userId, ticker: { $in: tickers } } },
@@ -619,8 +599,7 @@ export async function getLatestRecommendationsForTickers(userId, tickers) {
 }
 
 export async function recordFeedback(recId, user_action) {
-  const col = getCollection('recommendation_log')
-  if (!col) throw new Error('MongoDB not connected')
+  const col = recommendationRepository.collection()
   if (!recId) throw new Error('recId is required')
   if (user_action != null && !VALID_USER_ACTIONS.has(user_action)) throw new Error('invalid user_action')
   const q = { _id: await resolveObjectId(recId) }
@@ -628,125 +607,16 @@ export async function recordFeedback(recId, user_action) {
   return res.value
 }
 
-async function computePriceContext(ticker) {
-  const t = String(ticker).trim().toUpperCase()
-  let ts
-  try {
-    ts = await fetchTimeSeries(t, '1day', 60, { source: 'price_context' })
-  } catch (err) {
-    const { resolveLatestPrice } = await import('./prices.js')
-    const priceResult = await resolveLatestPrice(t, { source: 'price_context_fallback' })
-    if (priceResult.ok) {
-      return {
-        current_price: priceResult.price,
-        seven_day_change_pct: null,
-        thirty_day_change_pct: null,
-        trend: 'neutral',
-        above_50dma: null,
-        above_200dma: null,
-        volume_spike: false,
-        price_source: priceResult.source,
-        partial: true,
-      }
-    }
-    return null
-  }
-  if (!ts?.values?.length) return null
-
-  const values = ts.values.map(v => ({ close: Number(v.close), volume: Number(v.volume || 0) }))
-  const latest = values[0]
-  const mean = (arr) => arr.reduce((s, v) => s + v, 0) / arr.length
-  const closeAt = (n) => values.length > n ? values[n].close : null
-
-  const seven_close = closeAt(7)
-  const thirty_close = closeAt(30)
-  const seven_day_change_pct = seven_close ? ((latest.close - seven_close) / seven_close) * 100 : null
-  const thirty_day_change_pct = thirty_close ? ((latest.close - thirty_close) / thirty_close) * 100 : null
-
-  const dma = (n) => values.length >= n ? mean(values.slice(0, n).map(x => x.close)) : null
-  const dma50 = dma(50)
-  const dma200 = dma(200)
-
-  let trend = 'neutral'
-  if (seven_day_change_pct != null && thirty_day_change_pct != null) {
-    if (seven_day_change_pct > 1 && thirty_day_change_pct > 1) trend = 'bullish'
-    else if (seven_day_change_pct < -1 && thirty_day_change_pct < -1) trend = 'bearish'
-  } else if (seven_day_change_pct != null) {
-    trend = seven_day_change_pct > 1 ? 'bullish' : seven_day_change_pct < -1 ? 'bearish' : 'neutral'
-  }
-
-  let volume_spike = false
-  if (values.length >= 5) {
-    const recent = values.slice(1, 31).map(v => v.volume).filter(v => v > 0)
-    if (recent.length >= 3 && mean(recent) > 0 && latest.volume > mean(recent) * 2) volume_spike = true
-  }
-
-  return {
-    current_price: latest.close,
-    seven_day_change_pct: seven_day_change_pct != null ? Number(seven_day_change_pct.toFixed(3)) : null,
-    thirty_day_change_pct: thirty_day_change_pct != null ? Number(thirty_day_change_pct.toFixed(3)) : null,
-    trend, above_50dma: dma50 != null ? latest.close > dma50 : null,
-    above_200dma: dma200 != null ? latest.close > dma200 : null,
-    volume_spike,
-  }
-}
-
 export async function get_price_context(ticker) {
   if (!ticker) throw new Error('ticker required')
-  const t = String(ticker).trim().toUpperCase()
-  const { data } = await getOrFetchCached('price_context_cache', t, CACHE_TTL_MS.price_context, () => computePriceContext(t))
-  return data
-}
-
-async function fetchMarketNewsRaw(ticker) {
-  const t = String(ticker).trim().toUpperCase()
-  logApiUsage({ provider: 'yahoo', endpoint: 'rss', ticker: t, source: 'market_news' })
-  const url = `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(t)}&region=US&lang=en-US`
-  let xml
-  try {
-    const resp = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'StockSense/1.0' } })
-    if (!resp.ok) return []
-    xml = await resp.text()
-  } catch { return [] }
-
-  const items = xml.match(/<item>[\s\S]*?<\/item>/g) || []
-  return items.slice(0, 5).map(item => {
-    const title = (item.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>/) || item.match(/<title>([\s\S]*?)<\/title>/))?.[1]?.trim()
-    const pub = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1]?.trim() || null
-    return title ? { headline: title, published_at: pub } : null
-  }).filter(Boolean)
+  const marketDataProvider = await getMarketDataProvider()
+  return marketDataProvider.getPriceContext(ticker)
 }
 
 export async function get_market_news(ticker) {
   if (!ticker) throw new Error('ticker required')
-  const t = String(ticker).trim().toUpperCase()
-  const { data } = await getOrFetchCached('market_news_cache', t, CACHE_TTL_MS.market_news, () => fetchMarketNewsRaw(t))
-  return data || []
-}
-
-function validateGeminiOutput(output) {
-  if (!output || typeof output !== 'object' || Array.isArray(output)) throw new Error('Gemini returned invalid JSON')
-  if (!VALID_SIGNALS.has(output.signal)) throw new Error('Gemini returned invalid signal')
-  const confidence = Number(output.confidence)
-  if (!Number.isFinite(confidence)) throw new Error('Gemini returned invalid confidence')
-  const rationale = typeof output.rationale === 'string' ? output.rationale.trim() : ''
-  if (!rationale) throw new Error('Gemini returned empty rationale')
-  return {
-    signal: output.signal, confidence, rationale,
-    supporting_factors: Array.isArray(output.supporting_factors) ? output.supporting_factors.filter(f => typeof f === 'string' && f.trim()) : [],
-    risks: Array.isArray(output.risks) ? output.risks.filter(r => typeof r === 'string' && r.trim()) : []
-  }
-}
-
-import { GoogleAuth } from 'google-auth-library'
-
-const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] })
-
-async function getAccessToken() {
-  const client = await auth.getClient()
-  const { token } = await client.getAccessToken()
-  if (!token) throw new Error('Failed to obtain Vertex AI access token via ADC')
-  return token
+  const marketDataProvider = await getMarketDataProvider()
+  return marketDataProvider.getMarketNews(ticker)
 }
 
 export async function buildPortfolioDecisionContext(userId, ticker, prefs = null) {
@@ -796,46 +666,16 @@ export async function buildPortfolioDecisionContext(userId, ticker, prefs = null
 }
 
 async function callGeminiOnce({ user_profile, portfolio, watchlist, latest_price, price_context, market_news, portfolio_context } = {}) {
-  const accessToken = await getAccessToken()
-
-  const systemInstruction = 'You are StockSense, an investment operations agent. Return only strict JSON matching the schema. Do not include markdown, code fences, extra keys or commentary. Use portfolio_context plus market data. Mention portfolio impact (positions, cash, sectors, capacity) only when it materially affects the decision - avoid repeating exposure percentages on every recommendation.'
-  const context = JSON.stringify({ user_profile, portfolio, portfolio_context, watchlist, latest_price, price_context, market_news } ?? null, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2)
-
-  const response = await fetch(VERTEX_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemInstruction }] },
-      contents: [{ role: 'user', parts: [{ text: `Analyze the following context and return only the decision JSON.\nContext:\n${context}` }] }],
-      generationConfig: {
-        temperature: 0.2, topP: 0.95, maxOutputTokens: 2048,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'object',
-          required: ['signal', 'confidence', 'rationale', 'supporting_factors', 'risks'],
-          properties: {
-            signal: { type: 'string', enum: ['BUY', 'HOLD', 'EXIT', 'WATCH', 'REBALANCE'] },
-            confidence: { type: 'number' }, rationale: { type: 'string' },
-            supporting_factors: { type: 'array', items: { type: 'string' } },
-            risks: { type: 'array', items: { type: 'string' } }
-          }
-        },
-      }
-    })
+  const provider = await getStructuredRecommendationProvider()
+  return provider.generateStructuredRecommendation({
+    user_profile,
+    portfolio,
+    watchlist,
+    latest_price,
+    price_context,
+    market_news,
+    portfolio_context,
   })
-
-  const payload = await response.json()
-  if (!response.ok) {
-    const errMsg = payload?.error?.message || payload?.error?.status || `Vertex AI HTTP ${response.status}`
-    const err = new Error(errMsg)
-    err.status = response.status
-    throw err
-  }
-  const text = payload?.candidates?.[0]?.content?.parts?.map(p => p?.text || '').join('')?.trim()
-  if (!text) throw new Error('Vertex AI returned empty response')
-  let parsed
-  try { parsed = JSON.parse(text) } catch { throw new Error('Vertex AI returned non-JSON output') }
-  return validateGeminiOutput(parsed)
 }
 
 export async function callGemini(input = {}) {
@@ -847,7 +687,7 @@ export async function callGemini(input = {}) {
       lastErr = err
       if (!isRateLimitError(err) || attempt === GEMINI_MAX_RETRIES) throw err
       const waitMs = GEMINI_RETRY_BASE_MS * Math.pow(3, attempt - 1)
-      logWarn('agent', `Gemini rate-limited (attempt ${attempt}/${GEMINI_MAX_RETRIES}) - backing off ${Math.round(waitMs / 1000)}s`)
+      logWarn('agent', `AI provider rate-limited (attempt ${attempt}/${GEMINI_MAX_RETRIES}) - backing off ${Math.round(waitMs / 1000)}s`)
       await sleep(waitMs)
     }
   }
@@ -881,6 +721,7 @@ export async function runAgentForUser(userId) {
   const preferredSectors = mergePreferredSectors(user_profile.preferred_sectors, prefs?.preferred_sectors)
   const portfolio = await get_portfolio(userId)
   const watchlistItems = await get_watchlist(userId)
+  const marketDataProvider = await getMarketDataProvider()
 
   const tickerSet = new Set()
   if (Array.isArray(portfolio)) for (const p of portfolio) if (p.ticker) tickerSet.add(p.ticker)
@@ -907,20 +748,10 @@ export async function runAgentForUser(userId) {
   logInfo('agent', `Scanning ${tickers.length} ticker(s) for ${userId}${cachedCount ? ` (${cachedCount} skipped by adaptive scan)` : ''}: ${tickers.join(', ') || '-'}`)
   if (!tickers.length) return results
 
-  await refreshQuotesBatch(tickers, { source: 'scan' })
+  await marketDataProvider.refreshQuotes(tickers, { source: 'scan' })
 
   const contextResults = await Promise.allSettled(tickers.map(async (ticker) => {
-    const [latest_price, price_context, market_news] = await Promise.allSettled([
-      get_latest_price(ticker),
-      get_price_context(ticker),
-      get_market_news(ticker)
-    ])
-    return {
-      ticker,
-      latest_price: latest_price.status === 'fulfilled' ? latest_price.value : null,
-      price_context: price_context.status === 'fulfilled' ? price_context.value : null,
-      market_news: market_news.status === 'fulfilled' ? market_news.value : []
-    }
+    return marketDataProvider.getMarketIntelligence(ticker)
   }))
 
   const fulfilled = contextResults.filter(s => s.status === 'fulfilled').map(s => s.value)
@@ -932,7 +763,7 @@ export async function runAgentForUser(userId) {
       const portfolio_context = await buildPortfolioDecisionContext(userId, ticker, prefs)
       recommendation = await generateSignal(ticker, { user_profile, portfolio, watchlist_items: watchlistItems, latest_price, price_context, market_news, portfolio_context })
       if (recommendation.confidence != null && preferredSectors.length) {
-        const meta = await getTickerMetadata(ticker)
+        const meta = await marketDataProvider.getTickerMetadata(ticker)
         recommendation.confidence = applySectorPreferenceBonus(
           recommendation.confidence,
           meta.sector,

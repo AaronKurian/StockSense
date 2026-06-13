@@ -1,0 +1,8 @@
+export { userRepository, UserRepository } from './UserRepository.js'
+export { preferencesRepository, PreferencesRepository } from './PreferencesRepository.js'
+export { portfolioRepository, PortfolioRepository } from './PortfolioRepository.js'
+export { watchlistRepository, WatchlistRepository } from './WatchlistRepository.js'
+export { recommendationRepository, RecommendationRepository } from './RecommendationRepository.js'
+export { priceRepository, PriceRepository } from './PriceRepository.js'
+export { tradeRepository, TradeRepository } from './TradeRepository.js'
+export { notificationRepository, NotificationRepository } from './NotificationRepository.js'

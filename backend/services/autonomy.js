@@ -1,10 +1,11 @@
 
 import { getCollection } from '../config/db.js'
-import { get_latest_price, saveRecommendation, executeRecommendation, blockRecommendation, getRecommendationsByStatus } from './agent.js'
+import { get_latest_price, saveRecommendation, blockRecommendation, getRecommendationsByStatus } from './agent.js'
 import { refreshQuotesBatch, isExecutionPriceStale } from './prices.js'
-import { createVirtualTrade, validateExecution, calculatePositionSize, getVirtualCash, markToMarket } from './trades.js'
-import { createNotification, formatTradeTitle, formatTradeMessage, formatRebalanceMessage, formatBlockMessage } from './notifications.js'
+import { markToMarket } from './trades.js'
+import { createNotification, formatRebalanceMessage, formatBlockMessage } from './notifications.js'
 import { info, warn } from '../lib/logger.js'
+import { virtualExecutionWorkflow } from '../application/workflows/index.js'
 
 const LOCK_TIMEOUT_MS = 15 * 60 * 1000
 
@@ -93,18 +94,18 @@ export async function runAutonomousExecution(userId, prefs) {
       const savedRec = await saveRecommendation({ userId, ticker: pos.ticker, signal: 'EXIT', confidence: 0.9, rationale: exitReason, supporting_factors: [exitReason], risks: ['Market may reverse'] })
       const recId = savedRec?._id?.toString()
       if (recId) {
-        const execd = await executeRecommendation(recId, { execution_mode: 'automatic' })
-        if (execd._alreadyExecuted) continue
-        await createVirtualTrade({ userId, ticker: pos.ticker, action: 'SELL', quantity: sellQuantity, entry_price: currentPrice, signal_id: recId, rationale: exitReason })
-        await createNotification({
+        const workflowResult = await virtualExecutionWorkflow.executeRecommendation({
           userId,
-          type: 'auto_executed',
-          title: formatTradeTitle('SELL', pos.ticker),
-          message: formatTradeMessage({ quantity: sellQuantity, price: currentPrice, mode: 'automatic' }),
-          ticker: pos.ticker,
-          recId,
+          recommendation: savedRec,
+          executionMode: 'automatic',
+          preferences: prefs,
+          quantityOverride: sellQuantity,
         })
-        executed.push(execd)
+        if (!workflowResult.decision.allowed) {
+          await blockRecommendation(recId, workflowResult.decision.reason)
+          continue
+        }
+        if (workflowResult.recommendation) executed.push(workflowResult.recommendation)
         exits++
         info('autonomy', 'Auto exit', { userId, ticker: pos.ticker, reason: exitReason, pnlPct: pnlPct.toFixed(1), drawdownPct: drawdownPct.toFixed(1) })
       }
@@ -189,46 +190,35 @@ export async function runAutonomousExecution(userId, prefs) {
       continue
     }
 
-    const validation = await validateExecution({ userId, ticker: rec.ticker, action, confidence: rec.confidence, price })
-    if (!validation.allowed) {
-      await blockRecommendation(rec._id.toString(), validation.reason)
+    const workflowResult = await virtualExecutionWorkflow.executeRecommendation({
+      userId,
+      recommendation: rec,
+      executionMode: 'automatic',
+      preferences: prefs,
+    })
+    if (!workflowResult.decision.allowed) {
+      await blockRecommendation(rec._id.toString(), workflowResult.decision.reason)
       await createNotification({
         userId,
         type: 'blocked',
         title: `${rec.signal} ${rec.ticker} blocked`,
-        message: formatBlockMessage(validation.reason),
+        message: formatBlockMessage(workflowResult.decision.reason),
         ticker: rec.ticker,
         recId: rec._id.toString(),
       })
-      info('autonomy', 'Execution blocked', { userId, ticker: rec.ticker, reason: validation.reason })
+      info('autonomy', 'Execution blocked', { userId, ticker: rec.ticker, reason: workflowResult.decision.reason })
       continue
     }
 
     try {
-      let quantity
-      if (action === 'BUY') {
-        const cashNow = (await getVirtualCash(userId)).virtual_cash
-        const sizing = calculatePositionSize({ virtual_cash: cashNow, price, confidence: rec.confidence, max_position_size_pct: prefs?.max_position_size_pct || 20, risk_tolerance: prefs?.risk_tolerance || 'moderate', cash_reserve_pct: prefs?.cash_reserve_pct || 10 })
-        quantity = sizing.quantity
-      } else {
-        const position = await getCollection('portfolio_positions')?.findOne({ userId, ticker: rec.ticker })
-        quantity = position ? Math.floor(Number(position.quantity)) : 0
-        if (quantity <= 0) continue
-      }
-
-      const execd = await executeRecommendation(rec._id.toString(), { execution_mode: 'automatic' })
-      if (execd._alreadyExecuted) continue
-      await createVirtualTrade({ userId, ticker: rec.ticker, action, quantity, entry_price: price, signal_id: rec._id.toString(), rationale: rec.rationale })
-      await createNotification({
+      if (workflowResult.recommendation) executed.push(workflowResult.recommendation)
+      info('autonomy', 'Auto-executed trade', {
         userId,
-        type: 'auto_executed',
-        title: formatTradeTitle(action, rec.ticker),
-        message: formatTradeMessage({ quantity, price, mode: 'automatic' }),
         ticker: rec.ticker,
-        recId: rec._id.toString(),
+        action,
+        quantity: workflowResult.trade?.quantity || workflowResult.decision.details?.sizing?.quantity,
+        price,
       })
-      executed.push(execd)
-      info('autonomy', 'Auto-executed trade', { userId, ticker: rec.ticker, action, quantity, price })
     } catch (err) {
       warn('autonomy', `Auto-exec failed for ${rec.ticker}: ${err.message}`)
     }

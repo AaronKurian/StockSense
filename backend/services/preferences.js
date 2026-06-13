@@ -1,5 +1,5 @@
-import { getCollection } from '../config/db.js'
 import { migrateSectorFields, parseAndValidateSectors } from '../lib/sectors.js'
+import { preferencesRepository } from '../repositories/index.js'
 
 const VALID_RISK = new Set(['conservative', 'moderate', 'aggressive'])
 const VALID_HORIZON = new Set(['short', 'medium', 'long'])
@@ -37,34 +37,28 @@ async function persistSectorMigration(col, userId, sectors, hadLegacy) {
 }
 
 export async function getPreferences(userId) {
-  const col = getCollection('agent_preferences')
-  if (!col) throw new Error('MongoDB not connected')
   if (!userId) throw new Error('userId is required')
-  const stored = await col.findOne({ userId })
+  const stored = await preferencesRepository.findByUserId(userId)
   if (!stored) return null
 
   const { sectors, migrated, hadLegacy } = migrateSectorFields(stored)
   if (migrated || hadLegacy) {
-    await persistSectorMigration(col, userId, sectors, hadLegacy)
+    await persistSectorMigration(preferencesRepository.collection(), userId, sectors, hadLegacy)
   }
 
   return { ...DEFAULT_PREFERENCES, ...stored, preferred_sectors: sectors }
 }
 
 export async function createDefaultPreferences(userId) {
-  const col = getCollection('agent_preferences')
-  if (!col) throw new Error('MongoDB not connected')
   if (!userId) throw new Error('userId is required')
-  const existing = await col.findOne({ userId })
+  const existing = await preferencesRepository.findByUserId(userId)
   if (existing) return existing
   const doc = { userId, ...DEFAULT_PREFERENCES, created_at: new Date(), updated_at: new Date() }
-  await col.insertOne(doc)
+  await preferencesRepository.insert(doc)
   return doc
 }
 
 export async function updatePreferences(userId, updates = {}) {
-  const col = getCollection('agent_preferences')
-  if (!col) throw new Error('MongoDB not connected')
   if (!userId) throw new Error('userId is required')
 
   const set = { updated_at: new Date() }
@@ -151,8 +145,8 @@ export async function updatePreferences(userId, updates = {}) {
   if (Object.keys(set).length === 1) throw new Error('no valid fields to update')
   const update = { $set: set }
   if (unsetLegacySector) update.$unset = { preferred_sector: '' }
-  const res = await col.findOneAndUpdate({ userId }, update, { returnDocument: 'after', upsert: true, includeResultMetadata: false })
-  const doc = res || (await col.findOne({ userId }))
+  const res = await preferencesRepository.updateByUserId(userId, update, { upsert: true })
+  const doc = res || (await preferencesRepository.findByUserId(userId))
   const { sectors } = migrateSectorFields(doc)
   return { ...DEFAULT_PREFERENCES, ...doc, preferred_sectors: sectors }
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { motion } from "framer-motion"
 import { Bell, Trash2 } from "lucide-react"
@@ -31,13 +31,13 @@ export default function NotificationsPage() {
   const [notifications, setNotifications] = useState([])
   const [loading, setLoading] = useState(true)
 
-  const load = () => {
+  const load = useCallback(() => {
     if (!userId) return
     fetchNotifications(userId, { limit: 100 })
       .then(d => { if (Array.isArray(d)) setNotifications(d) })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }
+  }, [userId])
 
   useEffect(() => {
     if (!userId) return
@@ -45,7 +45,7 @@ export default function NotificationsPage() {
 
     markAllNotificationsRead(userId).then(() => emitNotificationsChanged()).catch(() => {})
 
-  }, [userId])
+  }, [userId, load])
 
   const handleDelete = async (id) => {
     setNotifications(prev => prev.filter(n => n._id !== id))

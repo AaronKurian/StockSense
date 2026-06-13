@@ -4,7 +4,9 @@ const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
 async function apiFetch(path, options = {}) {
   const { headers, ...rest } = options
-  const res = await fetch(`${BASE}${path}`, { ...rest, headers: { 'Content-Type': 'application/json', ...headers } })
+  const token = getToken()
+  const authHeaders = token && !headers?.Authorization ? { Authorization: `Bearer ${token}` } : {}
+  const res = await fetch(`${BASE}${path}`, { ...rest, headers: { 'Content-Type': 'application/json', ...authHeaders, ...headers } })
   const json = await res.json()
   if (!res.ok) throw new Error(json?.error || `API error ${res.status}`)
   return json
@@ -205,19 +207,19 @@ export function agentChatStream(userId, message) {
   const controller = new AbortController()
 
   const stream = new ReadableStream({
-    async start(controller) {
+    async start(streamController) {
       try {
         const res = await fetch(`${BASE}/agent/chat/stream`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
           body: JSON.stringify({ userId, message }),
           signal: controller.signal,
         })
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
-          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ error: err.error || 'Request failed' })}\n\n`))
-          controller.close()
+          streamController.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ error: err.error || 'Request failed' })}\n\n`))
+          streamController.close()
           return
         }
 
@@ -225,14 +227,14 @@ export function agentChatStream(userId, message) {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-          controller.enqueue(value)
+          streamController.enqueue(value)
         }
-        controller.close()
+        streamController.close()
       } catch (err) {
         if (err.name !== 'AbortError') {
-          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ error: err.message })}\n\n`))
+          streamController.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ error: err.message })}\n\n`))
         }
-        controller.close()
+        streamController.close()
       }
     },
   })

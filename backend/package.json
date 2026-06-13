@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "agent:dev": "npx adk web agent/index.js"
+    "agent:dev": "npx adk web agent/gemini-adk.js"
   },
   "dependencies": {
     "@google/adk": "latest",

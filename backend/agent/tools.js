@@ -13,6 +13,7 @@ const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://localhost:8080/mcp'
 const MCP_DB_NAME = process.env.MONGODB_DB_NAME || 'stocksense';
 const MCP_PROTOCOL_VERSION = '2025-03-26';
 const MCP_TIMEOUT_MS = Number(process.env.MCP_TIMEOUT_MS ?? 15000);
+const MCP_ENABLED = process.env.MCP_ENABLED === 'true';
 const MCP_WRITE_ENABLED = process.env.MCP_WRITE_ENABLED !== 'false';
 const MCP_RECOMMENDATION_COLLECTION = process.env.MCP_RECOMMENDATION_COLLECTION || 'recommendation_log';
 const MCP_FEEDBACK_COLLECTION = process.env.MCP_FEEDBACK_COLLECTION || 'recommendation_feedback';
@@ -174,6 +175,7 @@ async function postMcpRpc({ method, params = {}, sessionId = null }) {
 }
 
 async function ensureMcpSession() {
+  if (!MCP_ENABLED) throw new Error('MongoDB MCP adapter disabled');
   if (mcpSessionId) return mcpSessionId;
   const { sessionId } = await postMcpRpc({
     method: 'initialize',
@@ -609,7 +611,7 @@ async function recordFeedbackViaMcp(recId, userAction) {
 
 export const getLatestPrice = new FunctionTool({
   name: 'get_latest_price',
-  description: 'Get the latest cached price, volume and change percentage for a stock ticker. Updated in real-time via Twelve Data WebSocket.',
+  description: 'Get the latest cached price, volume and change percentage for a stock ticker from the configured market data provider.',
   parameters: z.object({
     ticker: z.string().describe('Stock ticker symbol, e.g. AAPL, MSFT, NVDA'),
   }),
@@ -621,7 +623,7 @@ export const getLatestPrice = new FunctionTool({
 
 export const getPriceContext = new FunctionTool({
   name: 'get_price_context',
-  description: 'Get technical price context for a ticker: 7-day/30-day change, trend direction, 50DMA/200DMA position, volume spike detection. Uses Twelve Data time_series API.',
+  description: 'Get technical price context for a ticker: 7-day/30-day change, trend direction, 50DMA/200DMA position, and volume spike detection.',
   parameters: z.object({
     ticker: z.string().describe('Stock ticker symbol'),
   }),
@@ -633,7 +635,7 @@ export const getPriceContext = new FunctionTool({
 
 export const getMarketNews = new FunctionTool({
   name: 'get_market_news',
-  description: 'Get up to 5 recent news headlines for a stock ticker. Use this to understand current market sentiment and catalysts.',
+  description: 'Get up to 5 recent news headlines for a stock ticker from the configured market intelligence provider. Use this to understand current market sentiment and catalysts.',
   parameters: z.object({
     ticker: z.string().describe('Stock ticker symbol'),
   }),
@@ -648,6 +650,7 @@ export const getPortfolio = new FunctionTool({
   }),
   execute: async ({ userId }) => {
     try {
+      if (!MCP_ENABLED) throw new Error('MongoDB MCP adapter disabled');
       const result = await getPortfolioViaMcp(userId);
       logMcpSuccess('get_portfolio', { userId, mcp_tool: 'find', collection: 'portfolio_positions', result_count: Array.isArray(result) ? result.length : null });
       return result || [];
@@ -667,6 +670,7 @@ export const getWatchlist = new FunctionTool({
   }),
   execute: async ({ userId }) => {
     try {
+      if (!MCP_ENABLED) throw new Error('MongoDB MCP adapter disabled');
       const result = await getWatchlistViaMcp(userId);
       logMcpSuccess('get_watchlist', { userId, mcp_tool: 'find', collections: ['watchlists', 'watchlist_items'], result_count: Array.isArray(result) ? result.length : null });
       return result || [];
@@ -692,6 +696,7 @@ export const saveRec = new FunctionTool({
   }),
   execute: async (params) => {
     try {
+      if (!MCP_ENABLED) throw new Error('MongoDB MCP adapter disabled');
       const result = await saveRecommendationViaMcp(params);
       logMcpSuccess('save_recommendation', { userId: params.userId, ticker: params.ticker, signal: params.signal, mcp_tool: 'write-adapter' });
       return result;
@@ -737,6 +742,7 @@ export const getRecommendations = new FunctionTool({
   }),
   execute: async (params) => {
     try {
+      if (!MCP_ENABLED) throw new Error('MongoDB MCP adapter disabled');
       const result = await getRecommendationsViaMcp(params.userId, {
         limit: params.limit,
         signal: params.signal,
@@ -778,6 +784,7 @@ export const recordFb = new FunctionTool({
   }),
   execute: async ({ recId, user_action }) => {
     try {
+      if (!MCP_ENABLED) throw new Error('MongoDB MCP adapter disabled');
       const result = await recordFeedbackViaMcp(recId, user_action);
       logMcpSuccess('record_feedback', { recId, user_action, mcp_tool: 'write-adapter' });
       return result;

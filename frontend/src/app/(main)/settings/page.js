@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
 import { Settings, Shield, Brain, Radio, Save, Bell, Trash2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -31,6 +31,11 @@ export default function SettingsPage() {
     if (user?.name != null) setName(user.name)
   }, [user?.name])
 
+  const doCreateDefaults = useCallback(() => {
+    if (!userId) return
+    createPreferences(userId).then(setPrefs).catch(() => {})
+  }, [userId])
+
   useEffect(() => {
     if (!userId) return
     Promise.all([
@@ -44,11 +49,7 @@ export default function SettingsPage() {
       })
       .catch(() => doCreateDefaults())
       .finally(() => setLoading(false))
-  }, [userId])
-
-  const doCreateDefaults = () => {
-    createPreferences(userId).then(setPrefs).catch(() => {})
-  }
+  }, [userId, doCreateDefaults])
 
   const save = async () => {
     if (!prefs) return

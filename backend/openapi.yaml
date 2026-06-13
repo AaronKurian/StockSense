@@ -13,7 +13,7 @@ paths:
     get:
       operationId: getLatestPrice
       summary: Get the latest cached price for a ticker
-      description: Returns the most recent price, volume and change percentage for a single ticker from the latest_prices collection. Updated in real-time via Twelve Data WebSocket.
+      description: Returns the most recent price, volume and change percentage for a single ticker from the configured market data provider and latest_prices cache.
       parameters:
         - name: ticker
           in: query
@@ -46,7 +46,7 @@ paths:
     get:
       operationId: getPriceContext
       summary: Get technical price context for a ticker
-      description: Computes 7-day and 30-day price change percentages, trend direction, 50/200-day moving average positioning and volume spike detection using Twelve Data time_series API. Historical data is processed in memory and never stored.
+      description: Computes 7-day and 30-day price change percentages, trend direction, 50/200-day moving average positioning and volume spike detection using the configured market data provider. Historical data is processed in memory and never stored.
       parameters:
         - name: ticker
           in: query
@@ -69,7 +69,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "500":
-          description: Server error or Twelve Data API failure
+          description: Server error or market data provider failure
           content:
             application/json:
               schema:
@@ -79,7 +79,7 @@ paths:
     get:
       operationId: getMarketNews
       summary: Get recent market news headlines for a ticker
-      description: Returns up to 5 recent news headlines related to the specified ticker sourced from Yahoo Finance RSS. Used as context input for Gemini reasoning.
+      description: Returns up to 5 recent news headlines related to the specified ticker from the configured market intelligence provider. Used as context input for AI reasoning.
       parameters:
         - name: ticker
           in: query
